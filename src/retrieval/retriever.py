@@ -1,7 +1,6 @@
-from pathlib import Path
-
 from sentence_transformers import SentenceTransformer
 from qdrant_client import QdrantClient
+from qdrant_client.models import Filter, FieldCondition, MatchValue
 
 
 # ============================================================
@@ -18,7 +17,7 @@ TOP_K = 5
 
 
 # ============================================================
-# Initialize models and database
+# Initialize
 # ============================================================
 
 print("Loading embedding model...")
@@ -35,29 +34,106 @@ qdrant_client = QdrantClient(
 
 
 # ============================================================
-# Retrieve relevant chunks
+# Build metadata filter
+# ============================================================
+
+def build_metadata_filter(
+    ticker=None,
+    fiscal_year=None,
+    filing_type=None
+):
+    """
+    Build an optional Qdrant metadata filter.
+    """
+
+    conditions = []
+
+    if ticker:
+        conditions.append(
+            FieldCondition(
+                key="ticker",
+                match=MatchValue(
+                    value=ticker
+                )
+            )
+        )
+
+    if fiscal_year:
+        conditions.append(
+            FieldCondition(
+                key="fiscal_year",
+                match=MatchValue(
+                    value=fiscal_year
+                )
+            )
+        )
+
+    if filing_type:
+        conditions.append(
+            FieldCondition(
+                key="filing_type",
+                match=MatchValue(
+                    value=filing_type
+                )
+            )
+        )
+
+    if not conditions:
+        return None
+
+    return Filter(
+        must=conditions
+    )
+
+
+# ============================================================
+# Retrieve relevant documents
 # ============================================================
 
 def retrieve_documents(
     query: str,
-    top_k: int = TOP_K
+    top_k: int = TOP_K,
+    ticker=None,
+    fiscal_year=None,
+    filing_type=None
 ):
     """
-    Convert the user query into an embedding
-    and retrieve the most relevant chunks from Qdrant.
+    Retrieve relevant chunks using semantic search
+    with optional metadata filtering.
     """
 
+    # --------------------------------------------------------
     # Create query embedding
+    # --------------------------------------------------------
+
     query_embedding = embedding_model.encode(
         query,
         normalize_embeddings=True
     ).tolist()
 
+    # --------------------------------------------------------
+    # Build optional filter
+    # --------------------------------------------------------
+
+    metadata_filter = build_metadata_filter(
+        ticker=ticker,
+        fiscal_year=fiscal_year,
+        filing_type=filing_type
+    )
+
+    # --------------------------------------------------------
     # Search Qdrant
+    # --------------------------------------------------------
+
     search_results = qdrant_client.query_points(
         collection_name=COLLECTION_NAME,
+
         query=query_embedding,
+
+        query_filter=metadata_filter,
+
         limit=top_k,
+
         with_payload=True
     ).points
 
@@ -65,30 +141,35 @@ def retrieve_documents(
 
 
 # ============================================================
-# Display retrieval results
+# Display results
 # ============================================================
 
 def display_results(
-    query: str,
+    query,
     results
 ):
-    """
-    Display retrieved chunks in a readable format.
-    """
 
     print("\n")
     print("=" * 80)
     print("FINANCIAL RAG RETRIEVAL")
     print("=" * 80)
 
-    print(f"\nQuestion:")
-    print(query)
+    print(
+        f"\nQuestion:\n{query}"
+    )
 
-    print("\nRetrieved Documents:")
+    print(
+        "\nRetrieved Documents:"
+    )
+
     print("-" * 80)
 
     if not results:
-        print("No relevant documents found.")
+
+        print(
+            "No relevant documents found."
+        )
+
         return
 
     for rank, result in enumerate(
@@ -96,32 +177,56 @@ def display_results(
         start=1
     ):
 
-        payload = result.payload or {}
-
-        score = result.score
-
-        chunk_index = payload.get(
-            "chunk_index",
-            "N/A"
+        payload = (
+            result.payload or {}
         )
 
-        source = payload.get(
-            "source",
-            "Unknown"
+        print(
+            f"\nRESULT {rank}"
         )
 
-        text = payload.get(
-            "text",
-            ""
+        print(
+            f"Score: {result.score:.4f}"
         )
 
-        print(f"\nRESULT {rank}")
-        print(f"Score: {score:.4f}")
-        print(f"Source: {source}")
-        print(f"Chunk: {chunk_index}")
+        print(
+            f"Company: "
+            f"{payload.get('company', 'Unknown')}"
+        )
+
+        print(
+            f"Ticker: "
+            f"{payload.get('ticker', 'Unknown')}"
+        )
+
+        print(
+            f"Filing: "
+            f"{payload.get('filing_type', 'Unknown')}"
+        )
+
+        print(
+            f"Fiscal Year: "
+            f"{payload.get('fiscal_year', 'Unknown')}"
+        )
+
+        print(
+            f"Filing Date: "
+            f"{payload.get('filing_date', 'Unknown')}"
+        )
+
+        print(
+            f"Chunk: "
+            f"{payload.get('chunk_index', 'Unknown')}"
+        )
 
         print("\nText:")
-        print(text)
+
+        print(
+            payload.get(
+                "text",
+                ""
+            )
+        )
 
         print("-" * 80)
 
@@ -132,15 +237,21 @@ def display_results(
 
 if __name__ == "__main__":
 
-    print("\nStarting retrieval system...")
-
     question = (
         "What was Apple's total net sales "
         "in fiscal year 2025?"
     )
 
     results = retrieve_documents(
-        question
+        query=question,
+
+        top_k=5,
+
+        ticker="AAPL",
+
+        fiscal_year="2025",
+
+        filing_type="10-K"
     )
 
     display_results(
@@ -148,4 +259,6 @@ if __name__ == "__main__":
         results
     )
 
-    print("\nRetrieval completed successfully.")
+    print(
+        "\nRetrieval completed successfully."
+    )
