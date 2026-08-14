@@ -2,18 +2,24 @@ from sentence_transformers import SentenceTransformer
 from qdrant_client import QdrantClient
 from qdrant_client.models import Filter, FieldCondition, MatchValue
 
+from query_parser import parse_query
+from reranker import rerank_documents
+
 
 # ============================================================
 # Configuration
 # ============================================================
 
 QDRANT_PATH = "data/qdrant"
-
 COLLECTION_NAME = "financial_documents"
 
 EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
 
-TOP_K = 5
+# Retrieve 20 candidates before reranking
+TOP_K = 20
+
+# Keep only the best 5 after reranking
+RERANK_TOP_K = 5
 
 
 # ============================================================
@@ -87,20 +93,65 @@ def build_metadata_filter(
 
 
 # ============================================================
-# Retrieve relevant documents
+# Retrieve documents
 # ============================================================
 
 def retrieve_documents(
     query: str,
-    top_k: int = TOP_K,
-    ticker=None,
-    fiscal_year=None,
-    filing_type=None
+    top_k: int = TOP_K
 ):
     """
-    Retrieve relevant chunks using semantic search
-    with optional metadata filtering.
+    Parse the user query and retrieve relevant
+    financial documents from Qdrant.
+
+    Returns:
+        search_results
+        parsed_query
     """
+
+    # --------------------------------------------------------
+    # Query understanding
+    # --------------------------------------------------------
+
+    parsed_query = parse_query(
+        query
+    )
+
+    ticker = parsed_query["ticker"]
+    fiscal_year = parsed_query["fiscal_year"]
+    filing_type = parsed_query["filing_type"]
+    metric = parsed_query["metric"]
+
+    # --------------------------------------------------------
+    # Display parsed information
+    # --------------------------------------------------------
+
+    print("\nQuery Understanding:")
+
+    print(
+        f"Company: "
+        f"{parsed_query['company']}"
+    )
+
+    print(
+        f"Ticker: "
+        f"{ticker}"
+    )
+
+    print(
+        f"Fiscal Year: "
+        f"{fiscal_year}"
+    )
+
+    print(
+        f"Filing Type: "
+        f"{filing_type}"
+    )
+
+    print(
+        f"Metric: "
+        f"{metric}"
+    )
 
     # --------------------------------------------------------
     # Create query embedding
@@ -112,7 +163,7 @@ def retrieve_documents(
     ).tolist()
 
     # --------------------------------------------------------
-    # Build optional filter
+    # Build metadata filter
     # --------------------------------------------------------
 
     metadata_filter = build_metadata_filter(
@@ -127,39 +178,31 @@ def retrieve_documents(
 
     search_results = qdrant_client.query_points(
         collection_name=COLLECTION_NAME,
-
         query=query_embedding,
-
         query_filter=metadata_filter,
-
         limit=top_k,
-
         with_payload=True
     ).points
 
-    return search_results
+    return search_results, parsed_query
 
 
 # ============================================================
-# Display results
+# Display reranked results
 # ============================================================
 
-def display_results(
+def display_reranked_results(
     query,
     results
 ):
 
     print("\n")
     print("=" * 80)
-    print("FINANCIAL RAG RETRIEVAL")
+    print("RERANKED RESULTS")
     print("=" * 80)
 
     print(
         f"\nQuestion:\n{query}"
-    )
-
-    print(
-        "\nRetrieved Documents:"
     )
 
     print("-" * 80)
@@ -172,21 +215,53 @@ def display_results(
 
         return
 
-    for rank, result in enumerate(
+    for rank, item in enumerate(
         results,
         start=1
     ):
 
+        document = item["document"]
+
+        rerank_score = item[
+            "rerank_score"
+        ]
+
+        cross_encoder_score = item.get(
+            "cross_encoder_score",
+            0.0
+        )
+
+        metric_score = item.get(
+            "metric_score",
+            0.0
+        )
+
         payload = (
-            result.payload or {}
+            document.payload or {}
         )
 
         print(
-            f"\nRESULT {rank}"
+            f"\nRERANKED RESULT {rank}"
         )
 
         print(
-            f"Score: {result.score:.4f}"
+            f"Final Rerank Score: "
+            f"{rerank_score:.4f}"
+        )
+
+        print(
+            f"CrossEncoder Score: "
+            f"{cross_encoder_score:.4f}"
+        )
+
+        print(
+            f"Metric Relevance: "
+            f"{metric_score:.4f}"
+        )
+
+        print(
+            f"Original Score: "
+            f"{document.score:.4f}"
         )
 
         print(
@@ -225,7 +300,7 @@ def display_results(
             payload.get(
                 "text",
                 ""
-            )
+            )[:1000]
         )
 
         print("-" * 80)
@@ -238,27 +313,53 @@ def display_results(
 if __name__ == "__main__":
 
     question = (
-        "What was Apple's total net sales "
-        "in fiscal year 2025?"
+        "What was NVIDIA's net income "
+        "in fiscal year 2026?"
     )
 
-    results = retrieve_documents(
+    # --------------------------------------------------------
+    # Step 1: Retrieve 20 candidates
+    # --------------------------------------------------------
+
+    results, parsed_query = retrieve_documents(
         query=question,
-
-        top_k=5,
-
-        ticker="AAPL",
-
-        fiscal_year="2025",
-
-        filing_type="10-K"
+        top_k=TOP_K
     )
 
-    display_results(
+    print("\n")
+    print("=" * 80)
+    print(
+        f"Retrieved {len(results)} "
+        f"candidate documents."
+    )
+    print("=" * 80)
+
+    # --------------------------------------------------------
+    # Get requested metric
+    # --------------------------------------------------------
+
+    metric = parsed_query["metric"]
+
+    # --------------------------------------------------------
+    # Step 2: Rerank the 20 candidates
+    # --------------------------------------------------------
+
+    reranked_results = rerank_documents(
+        query=question,
+        documents=results,
+        top_k=RERANK_TOP_K,
+        metric=metric
+    )
+
+    # --------------------------------------------------------
+    # Step 3: Display top 5 after reranking
+    # --------------------------------------------------------
+
+    display_reranked_results(
         question,
-        results
+        reranked_results
     )
 
     print(
-        "\nRetrieval completed successfully."
+        "\nReranking completed successfully."
     )

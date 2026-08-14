@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-
+import argparse
 import requests
 
 
@@ -284,17 +284,27 @@ def download_filing(
 # Main
 # ============================================================
 
+
 if __name__ == "__main__":
 
-    # --------------------------------------------------------
-    # Start with Apple
-    # --------------------------------------------------------
-
-    company_key = "apple"
-
-    company_info = (
-        COMPANIES[company_key]
+    parser = argparse.ArgumentParser(
+        description="Download SEC 10-K filings"
     )
+
+    parser.add_argument(
+        "--company",
+        required=True,
+        choices=COMPANIES.keys(),
+        help="Company to download"
+    )
+
+    args = parser.parse_args()
+
+    company_key = args.company
+
+    company_info = COMPANIES[
+        company_key
+    ]
 
     download_filing(
         company_key,
