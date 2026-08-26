@@ -3,6 +3,8 @@ from pathlib import Path
 import argparse
 import requests
 
+import fitz
+
 
 # ============================================================
 # Configuration
@@ -13,6 +15,33 @@ SEC_HEADERS = {
 }
 
 RAW_DATA_DIR = Path("data/raw")
+
+
+def extract_pdf_pages(file_path: Path) -> list[dict[str, str | int]]:
+    """Extract text from a PDF while preserving one-based page numbers."""
+
+    if file_path.suffix.lower() != ".pdf":
+        raise ValueError("Only PDF files are supported.")
+
+    if not file_path.is_file():
+        raise FileNotFoundError(f"PDF not found: {file_path}")
+
+    try:
+        with fitz.open(file_path) as document:
+            pages = [
+                {
+                    "page_number": page_number,
+                    "text": page.get_text("text"),
+                }
+                for page_number, page in enumerate(document, start=1)
+            ]
+    except (fitz.FileDataError, OSError) as exc:
+        raise ValueError(f"Unable to read PDF: {file_path.name}") from exc
+
+    if not any(page["text"].strip() for page in pages):
+        raise ValueError("PDF contains no extractable text.")
+
+    return pages
 
 
 COMPANIES = {

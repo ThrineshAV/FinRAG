@@ -1,289 +1,100 @@
+"""Generate and persist embeddings for financial document chunks."""
+
+from __future__ import annotations
+
 import json
-import uuid
 from pathlib import Path
+from typing import Any
 
+import faiss
+import numpy as np
 from sentence_transformers import SentenceTransformer
-from qdrant_client import QdrantClient
-from qdrant_client.models import (
-    Distance,
-    VectorParams,
-    PointStruct
-)
 
 
-# ============================================================
-# Configuration
-# ============================================================
-
-CHUNKS_DIR = Path("data/chunks")
-
-QDRANT_PATH = "data/qdrant"
-
-COLLECTION_NAME = "financial_documents"
-
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+CHUNKS_DIR = PROJECT_ROOT / "data" / "chunks"
+VECTOR_DB_DIR = PROJECT_ROOT / "vector_db"
+INDEX_PATH = VECTOR_DB_DIR / "financial_documents.faiss"
+METADATA_PATH = VECTOR_DB_DIR / "financial_documents.json"
 EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
 
-VECTOR_SIZE = 384
+_embedding_model: SentenceTransformer | None = None
 
 
-# ============================================================
-# Load embedding model
-# ============================================================
-
-print("Loading embedding model...")
-
-embedding_model = SentenceTransformer(
-    EMBEDDING_MODEL
-)
-
-print("Embedding model loaded successfully.")
+def get_embedding_model() -> SentenceTransformer:
+    """Load the embedding model once, on first use."""
+    global _embedding_model
+    if _embedding_model is None:
+        _embedding_model = SentenceTransformer(EMBEDDING_MODEL)
+    return _embedding_model
 
 
-# ============================================================
-# Initialize Qdrant
-# ============================================================
-
-qdrant_client = QdrantClient(
-    path=QDRANT_PATH
-)
-
-
-# ============================================================
-# Create collection
-# ============================================================
-
-def create_collection():
-
-    collections = (
-        qdrant_client
-        .get_collections()
-        .collections
-    )
-
-    existing_names = [
-        collection.name
-        for collection in collections
-    ]
-
-    if COLLECTION_NAME not in existing_names:
-
-        qdrant_client.create_collection(
-            collection_name=COLLECTION_NAME,
-
-            vectors_config=VectorParams(
-                size=VECTOR_SIZE,
-                distance=Distance.COSINE
-            )
-        )
-
-        print(
-            f"Created collection: "
-            f"{COLLECTION_NAME}"
-        )
-
-    else:
-
-        print(
-            f"Collection already exists: "
-            f"{COLLECTION_NAME}"
-        )
-
-
-# ============================================================
-# Load structured chunks
-# ============================================================
-
-def load_chunks():
-
-    chunk_files = list(
-        CHUNKS_DIR.glob("*_chunks.json")
-    )
-
+def load_chunks() -> list[dict[str, Any]]:
+    """Load all structured chunks from the project data directory."""
+    chunk_files = sorted(CHUNKS_DIR.glob("*_chunks.json"))
     if not chunk_files:
-
-        raise FileNotFoundError(
-            "No structured chunk files found "
-            "in data/chunks/"
-        )
-
-    all_chunks = []
-
+        raise FileNotFoundError(f"No chunk files found in {CHUNKS_DIR}")
+    chunks: list[dict[str, Any]] = []
     for chunk_file in chunk_files:
-
-        print(
-            f"Loading: {chunk_file.name}"
-        )
-
-        with open(
-            chunk_file,
-            "r",
-            encoding="utf-8"
-        ) as file:
-
-            chunks = json.load(file)
-
-        all_chunks.extend(
-            chunks
-        )
-
-    return all_chunks
+        with chunk_file.open("r", encoding="utf-8") as file:
+            chunks.extend(json.load(file))
+    return chunks
 
 
-# ============================================================
-# Generate embeddings
-# ============================================================
+def generate_embeddings(chunks: list[dict[str, Any]]) -> np.ndarray:
+    """Generate normalized vectors for chunk text."""
+    if not chunks:
+        raise ValueError("Cannot embed an empty chunk collection")
+    embeddings = get_embedding_model().encode(
+        [chunk["text"] for chunk in chunks],
+        batch_size=32,
+        show_progress_bar=True,
+        normalize_embeddings=True,
+        convert_to_numpy=True,
+    )
+    return np.asarray(embeddings, dtype="float32")
 
-def generate_embeddings(
-    chunks
-):
 
-    texts = [
-        chunk["text"]
+def store_embeddings(chunks: list[dict[str, Any]], embeddings: np.ndarray) -> None:
+    """Persist a cosine-similarity FAISS index and aligned metadata."""
+    vectors = np.asarray(embeddings, dtype="float32")
+    if len(chunks) != len(vectors):
+        raise ValueError("Each chunk must have one embedding")
+    if vectors.ndim != 2 or not len(vectors):
+        raise ValueError("Embeddings must be a non-empty matrix")
+
+    index = faiss.IndexFlatIP(vectors.shape[1])
+    index.add(vectors)
+    metadata = [
+        {
+            "chunk_id": chunk.get("chunk_id", str(chunk["chunk_index"])),
+            "chunk_index": chunk["chunk_index"],
+            "text": chunk["text"],
+            **chunk.get("metadata", {}),
+        }
         for chunk in chunks
     ]
 
-    print(
-        f"Generating embeddings for "
-        f"{len(texts)} chunks..."
-    )
-
-    embeddings = embedding_model.encode(
-        texts,
-
-        batch_size=32,
-
-        show_progress_bar=True,
-
-        normalize_embeddings=True
-    )
-
-    return embeddings
-
-
-# ============================================================
-# Store embeddings
-# ============================================================
-
-def store_embeddings(
-    chunks,
-    embeddings
-):
-
-    points = []
-
-    for index, (
-        chunk,
-        embedding
-    ) in enumerate(
-        zip(chunks, embeddings)
-    ):
-
-        metadata = chunk.get(
-            "metadata",
-            {}
-        )
-
-        payload = {
-
-            # Main chunk information
-            "text": chunk["text"],
-
-            "chunk_index":
-                chunk["chunk_index"],
-
-            # Financial metadata
-            "company":
-                metadata.get("company"),
-
-            "ticker":
-                metadata.get("ticker"),
-
-            "cik":
-                metadata.get("cik"),
-
-            "filing_type":
-                metadata.get("filing_type"),
-
-            "filing_date":
-                metadata.get("filing_date"),
-
-            "report_date":
-                metadata.get("report_date"),
-
-            "fiscal_year":
-                metadata.get("fiscal_year"),
-
-            "accession_number":
-                metadata.get("accession_number"),
-
-            "primary_document":
-                metadata.get("primary_document"),
-
-            "source_url":
-                metadata.get("source_url"),
-        }
-
-        point = PointStruct(
-
-            id=str(
-                uuid.uuid4()
-            ),
-
-            vector=embedding.tolist(),
-
-            payload=payload
-        )
-
-        points.append(
-            point
-        )
-
-    qdrant_client.upsert(
-        collection_name=COLLECTION_NAME,
-
-        points=points
-    )
-
-    print(
-        f"Stored {len(points)} vectors "
-        f"in Qdrant."
+    VECTOR_DB_DIR.mkdir(parents=True, exist_ok=True)
+    faiss.write_index(index, str(INDEX_PATH))
+    METADATA_PATH.write_text(
+        json.dumps(metadata, indent=2, ensure_ascii=False),
+        encoding="utf-8",
     )
 
 
-# ============================================================
-# Main
-# ============================================================
+def load_vector_store() -> tuple[faiss.Index, list[dict[str, Any]]]:
+    """Load the FAISS index and its aligned metadata."""
+    if not INDEX_PATH.exists() or not METADATA_PATH.exists():
+        raise FileNotFoundError("FAISS index is unavailable. Run embedder.py first.")
+    index = faiss.read_index(str(INDEX_PATH))
+    metadata = json.loads(METADATA_PATH.read_text(encoding="utf-8"))
+    if index.ntotal != len(metadata):
+        raise ValueError("FAISS index and metadata counts do not match")
+    return index, metadata
+
 
 if __name__ == "__main__":
-
-    print("\n")
-    print("=" * 60)
-    print("FinSight-RAG Embedding Pipeline")
-    print("=" * 60)
-
-    create_collection()
-
     chunks = load_chunks()
-
-    print(
-        f"Loaded {len(chunks)} chunks."
-    )
-
-    embeddings = generate_embeddings(
-        chunks
-    )
-
-    print(
-        f"Generated {len(embeddings)} embeddings."
-    )
-
-    store_embeddings(
-        chunks,
-        embeddings
-    )
-
-    print(
-        "\nEmbedding pipeline completed successfully."
-    )
-
-    print("=" * 60)
+    store_embeddings(chunks, generate_embeddings(chunks))
+    print(f"Stored {len(chunks)} vectors in {INDEX_PATH}")

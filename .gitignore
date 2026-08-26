@@ -51,6 +51,11 @@ data/raw/
 data/processed/
 data/chunks/
 data/qdrant/
+vector_db/
+
+# Local vector indexes
+*.faiss
+*.index
 
 # Large datasets
 datasets/

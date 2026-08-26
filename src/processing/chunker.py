@@ -20,6 +20,35 @@ CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 200
 
 
+def create_page_chunks(
+    pages: list[dict[str, str | int]],
+    metadata: dict,
+) -> list[dict]:
+    """Create chunks from PDF pages and preserve each chunk's source page."""
+
+    chunks = []
+    document_id = metadata.get("document_id", "document")
+
+    for page in pages:
+        page_number = int(page["page_number"])
+        text_chunks = text_splitter.split_text(str(page["text"]))
+
+        for page_chunk_index, chunk_text in enumerate(text_chunks):
+            chunks.append({
+                "chunk_id": (
+                    f"{document_id}-p{page_number}-c{page_chunk_index}"
+                ),
+                "chunk_index": len(chunks),
+                "text": chunk_text,
+                "metadata": {
+                    **metadata,
+                    "page_number": page_number,
+                },
+            })
+
+    return chunks
+
+
 # ============================================================
 # Text splitter
 # ============================================================

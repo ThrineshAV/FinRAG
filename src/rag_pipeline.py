@@ -1,5 +1,5 @@
-from retrieval.retriever import retrieve_documents
-from generation.llm import generate_answer
+from src.retrieval.retriever import retrieve_documents
+from src.generation.llm import generate_answer
 
 
 # ============================================================
@@ -8,7 +8,7 @@ from generation.llm import generate_answer
 
 def build_context(results):
     """
-    Convert retrieved Qdrant results into a single
+    Convert retrieved FAISS results into a single
     context string for the LLM.
     """
 
@@ -19,20 +19,18 @@ def build_context(results):
         start=1
     ):
 
-        payload = result.payload or {}
-
-        text = payload.get(
+        text = result.get(
             "text",
             ""
         )
 
-        source = payload.get(
+        source = result.get(
             "source",
             "Unknown"
         )
 
-        chunk_index = payload.get(
-            "chunk_index",
+        page_number = result.get(
+            "page_number",
             "Unknown"
         )
 
@@ -40,7 +38,7 @@ def build_context(results):
             f"""
 SOURCE {rank}
 Document: {source}
-Chunk: {chunk_index}
+Page: {page_number}
 
 {text}
 """
@@ -85,7 +83,7 @@ def ask_financial_question(
 
     print("\nRetrieving relevant financial information...")
 
-    results = retrieve_documents(
+    results, _ = retrieve_documents(
         question,
         top_k=5
     )
@@ -127,23 +125,21 @@ def ask_financial_question(
 
     for result in results:
 
-        payload = result.payload or {}
-
-        source = payload.get(
+        source = result.get(
             "source",
             "Unknown"
         )
 
-        chunk_index = payload.get(
-            "chunk_index",
+        page_number = result.get(
+            "page_number",
             "Unknown"
         )
 
-        score = result.score
+        score = result.get("score", 0.0)
 
         sources.append({
             "source": source,
-            "chunk": chunk_index,
+            "page": page_number,
             "score": round(
                 score,
                 4
@@ -192,7 +188,7 @@ if __name__ == "__main__":
         )
 
         print(
-            f"Chunk: {source['chunk']}"
+            f"Page: {source['page']}"
         )
 
         print(
