@@ -259,6 +259,9 @@ for method, path, status, request ID, and duration.
 
 The `/ready` endpoint separately verifies that the FAISS vector store can be
 loaded, returning `503` when query dependencies are unavailable.
+
+API integration tests cover health and readiness responses, query fallback and
+missing-index errors, citation formatting, and invalid upload rejection.
 ```
 
 ## 4. Git Milestones

@@ -185,10 +185,10 @@ Supported companies are Apple, Microsoft, NVIDIA, Tesla, and Amazon.
 
 ## Validation
 
-The current source modules have been compiled, the FastAPI health endpoint
-has been smoke-tested, and tests cover PDF extraction, page-aware chunking,
-FAISS metadata persistence, and mocked reranking. A complete end-to-end test
-suite is still to be added.
+The current source modules have been compiled, and tests cover PDF extraction,
+page-aware chunking, FAISS metadata persistence, reranking, grounded request
+formatting, API readiness, query fallback/error handling, and upload
+validation.
 
 ## Planned Stages
 
