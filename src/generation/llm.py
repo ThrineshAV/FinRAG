@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+import os
+
 import requests
 
 
@@ -8,6 +12,8 @@ import requests
 OLLAMA_URL = "http://localhost:11434/api/generate"
 
 MODEL_NAME = "llama3.2:3b"
+OPENAI_URL = "https://api.openai.com/v1/chat/completions"
+OPENAI_MODEL = "gpt-4o-mini"
 
 
 # ============================================================
@@ -69,6 +75,46 @@ ANSWER:
     result = response.json()
 
     return result["response"].strip()
+
+
+def is_openai_configured() -> bool:
+    """Return whether the optional grounded OpenAI path can be used."""
+    return bool(os.getenv("OPENAI_API_KEY"))
+
+
+def generate_openai_answer(question: str, context: str) -> str:
+    """Generate a citation-aware answer using only retrieved context."""
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY is not configured")
+
+    response = requests.post(
+        OPENAI_URL,
+        headers={"Authorization": f"Bearer {api_key}"},
+        json={
+            "model": os.getenv("OPENAI_MODEL", OPENAI_MODEL),
+            "temperature": 0.1,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a financial research assistant. Answer only "
+                        "from the supplied sources. If the sources do not "
+                        "support the answer, say so. Preserve units and cite "
+                        "sources as [Source: <document>, page <number>]."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": f"SOURCES:\n{context}\n\nQUESTION:\n{question}",
+                },
+            ],
+        },
+        timeout=120,
+    )
+    response.raise_for_status()
+    result = response.json()
+    return result["choices"][0]["message"]["content"].strip()
 
 
 # ============================================================

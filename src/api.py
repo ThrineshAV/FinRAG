@@ -7,12 +7,14 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
 
+import requests
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 
 from src.embeddings.embedder import generate_embeddings, store_embeddings
 from src.ingestion.sec_ingestion import extract_pdf_pages
 from src.processing.chunker import create_page_chunks
+from src.generation.llm import generate_openai_answer, is_openai_configured
 from src.retrieval.retriever import retrieve_documents
 
 logger = logging.getLogger(__name__)
@@ -123,6 +125,21 @@ async def query_documents(request: QueryRequest) -> QueryResponse:
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
+    answer = "No relevant information was found."
+    if results:
+        answer = "Relevant financial passages were retrieved."
+        if is_openai_configured():
+            context = "\n\n".join(
+                f"Source: {result.get('source', result.get('document_id', 'unknown'))}; "
+                f"Page: {result.get('page_number', 'unknown')}\n{result.get('text', '')}"
+                for result in results
+            )
+            try:
+                answer = generate_openai_answer(request.question, context)
+            except (ValueError, requests.RequestException, KeyError, IndexError) as exc:
+                logger.error("Grounded answer generation failed: %s", exc)
+                raise HTTPException(status_code=502, detail="Answer generation failed") from exc
+
     citations = [
         Citation(
             chunk_id=str(result.get("chunk_id", result.get("chunk_index", "unknown"))),
@@ -138,11 +155,7 @@ async def query_documents(request: QueryRequest) -> QueryResponse:
         for result in results
     ]
     return QueryResponse(
-        answer=(
-            "No relevant information was found."
-            if not results
-            else "Relevant financial passages were retrieved."
-        ),
+        answer=answer,
         retrieved_chunks=[result.get("text", "") for result in results],
         metadata=results,
         citations=citations,

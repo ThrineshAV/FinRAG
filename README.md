@@ -15,10 +15,13 @@ Stage 1 foundation is partially complete:
 - Embeddings use `BAAI/bge-small-en-v1.5`.
 - FAISS index and aligned metadata are persisted in `vector_db/`.
 - Metadata-aware retrieval supports company, fiscal year, and filing type.
+- Comparison queries can retrieve multiple supported companies together.
 - FastAPI endpoints are available in `src/api.py`.
+- Grounded OpenAI answer generation is available when `OPENAI_API_KEY` is set.
+- A deterministic retrieval benchmark reports hit rate and MRR.
 - Existing Ollama answer generation remains available in `src/generation/llm.py`.
 
-The project is not production-ready yet. Reranking, OpenAI generation,
+The project is not production-ready yet. OpenAI generation,
 evaluation, authentication, observability, deployment configuration, and
 complete automated test coverage are still planned.
 
@@ -69,7 +72,7 @@ src/
 ├── retrieval/
 │   ├── query_parser.py            Company, year, and metric detection
 │   ├── retriever.py               FAISS retrieval and metadata filtering
-│   └── reranker.py                Reserved for the next retrieval stage
+│   └── reranker.py                Cross-encoder and metric-aware reranking
 └── generation/
 		└── llm.py                     Existing local Ollama generation
 ```
@@ -84,7 +87,9 @@ pip install -r requirements.txt
 ```
 
 The embedding model is downloaded automatically on first use. Ollama is
-required only when using the current local answer-generation path.
+required only when using the local CLI answer-generation path. Set
+`OPENAI_API_KEY` to enable grounded answers from the `/query` endpoint; without
+it, the endpoint returns retrieved evidence as before.
 
 ## Build The FAISS Index
 
@@ -143,8 +148,22 @@ Example request:
 }
 ```
 
-The response contains an answer status, retrieved text chunks, metadata, and
-page citations. Grounded LLM synthesis is planned for a later stage.
+The response contains a grounded answer when `OPENAI_API_KEY` is configured;
+otherwise it returns an evidence status, reranked text chunks, metadata, and
+page citations.
+
+## Evaluate Retrieval
+
+The benchmark runner reads cases from `data/evaluation.json` and reports hit
+rate, mean reciprocal rank, and average retrieved results:
+
+```powershell
+$env:PYTHONPATH="."
+python -m src.evaluation.benchmark
+```
+
+Replace the starter cases' `relevant_chunk_ids` with verified IDs from the
+indexed corpus before using the reported scores for comparison.
 
 ## Existing SEC Download Flow
 
@@ -160,16 +179,13 @@ Supported companies are Apple, Microsoft, NVIDIA, Tesla, and Amazon.
 ## Validation
 
 The current source modules have been compiled, the FastAPI health endpoint
-has been smoke-tested, and foundation tests cover PDF extraction, page-aware
-chunking, and FAISS metadata persistence. A complete end-to-end test suite is
-still to be added.
+has been smoke-tested, and tests cover PDF extraction, page-aware chunking,
+FAISS metadata persistence, and mocked reranking. A complete end-to-end test
+suite is still to be added.
 
 ## Planned Stages
 
 1. Finish and test the Stage 1 foundation.
-2. Add cross-encoder reranking: FAISS top 20 to best 5.
-3. Add multi-company comparison workflows.
-4. Add grounded OpenAI answer generation and citation prompts.
-5. Add a 30-question evaluation benchmark and retrieval metrics.
-6. Add production concerns such as structured logging, middleware, Docker,
+2. Curate the full 30-question evaluation benchmark.
+3. Add production concerns such as structured logging, middleware, Docker,
 	 health checks, integration tests, and deployment documentation.

@@ -91,38 +91,32 @@ METRICS = {
 # Detect company
 # ============================================================
 
+def detect_companies(query: str) -> list[dict[str, str]]:
+    """Return all supported companies mentioned in a query."""
+    query_lower = query.lower()
+    companies: list[dict[str, str]] = []
+
+    for company, information in COMPANIES.items():
+        if re.search(rf"\b{re.escape(company)}\b", query_lower):
+            companies.append(
+                {"company": information["name"], "ticker": information["ticker"]}
+            )
+
+    for information in COMPANIES.values():
+        ticker = information["ticker"]
+        if re.search(rf"\b{re.escape(ticker.lower())}\b", query_lower):
+            if not any(item["ticker"] == ticker for item in companies):
+                companies.append(
+                    {"company": information["name"], "ticker": ticker}
+                )
+
+    return companies
+
+
 def detect_company(query: str):
 
-    query_lower = query.lower()
-
-    for company, information in COMPANIES.items():
-
-        if company in query_lower:
-
-            return {
-                "company": information["name"],
-                "ticker": information["ticker"]
-            }
-
-    # Also support ticker symbols
-    for company, information in COMPANIES.items():
-
-        ticker = information["ticker"].lower()
-
-        if re.search(
-            rf"\b{ticker}\b",
-            query_lower
-        ):
-
-            return {
-                "company": information["name"],
-                "ticker": information["ticker"]
-            }
-
-    return {
-        "company": None,
-        "ticker": None
-    }
+    companies = detect_companies(query)
+    return companies[0] if companies else {"company": None, "ticker": None}
 
 
 # ============================================================
@@ -228,6 +222,7 @@ def parse_query(query: str):
     company_info = detect_company(
         query
     )
+    company_list = detect_companies(query)
 
     fiscal_year = detect_fiscal_year(
         query
@@ -249,6 +244,10 @@ def parse_query(query: str):
 
         "ticker":
             company_info["ticker"],
+
+        "companies": [item["company"] for item in company_list],
+
+        "tickers": [item["ticker"] for item in company_list],
 
         "fiscal_year":
             fiscal_year,

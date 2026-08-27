@@ -57,6 +57,10 @@ vector_db/
 *.faiss
 *.index
 
+# Generated evaluation reports
+data/evaluation_results/
+data/evaluation_results*.json
+
 # Large datasets
 datasets/
 *.csv

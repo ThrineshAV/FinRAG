@@ -1,5 +1,9 @@
-from sentence_transformers import CrossEncoder
+from __future__ import annotations
+
 import re
+from typing import Any
+
+from sentence_transformers import CrossEncoder
 
 
 # ============================================================
@@ -16,13 +20,15 @@ METRIC_BOOST = 1.5
 # Load reranker
 # ============================================================
 
-print("Loading reranker model...")
+_reranker: CrossEncoder | None = None
 
-reranker = CrossEncoder(
-    RERANKER_MODEL
-)
 
-print("Reranker model loaded.")
+def get_reranker() -> CrossEncoder:
+    """Load the cross-encoder only when reranking is requested."""
+    global _reranker
+    if _reranker is None:
+        _reranker = CrossEncoder(RERANKER_MODEL)
+    return _reranker
 
 
 # ============================================================
@@ -121,46 +127,31 @@ def calculate_metric_relevance(
 # ============================================================
 
 def rerank_documents(
-    query,
-    documents,
-    top_k=5,
-    metric=None
-):
+    query: str,
+    documents: list[dict[str, Any]],
+    top_k: int = 5,
+    metric: str | None = None,
+    model: Any | None = None,
+) -> list[dict[str, Any]]:
     """
     Rerank retrieved documents using a CrossEncoder
     combined with financial metric relevance.
 
-    documents should be Qdrant ScoredPoint objects.
+    Documents are flattened FAISS metadata records with a ``text`` field.
     """
 
     if not documents:
         return []
+    if top_k < 1:
+        raise ValueError("top_k must be positive")
 
-    pairs = []
-
-    for document in documents:
-
-        payload = document.payload or {}
-
-        text = payload.get(
-            "text",
-            ""
-        )
-
-        pairs.append(
-            (
-                query,
-                text
-            )
-        )
+    pairs = [(query, document.get("text", "")) for document in documents]
 
     # --------------------------------------------------------
     # Generate CrossEncoder scores
     # --------------------------------------------------------
 
-    cross_encoder_scores = reranker.predict(
-        pairs
-    )
+    cross_encoder_scores = (model or get_reranker()).predict(pairs)
 
     # --------------------------------------------------------
     # Calculate final ranking scores
@@ -168,17 +159,8 @@ def rerank_documents(
 
     ranked_documents = []
 
-    for document, cross_score in zip(
-        documents,
-        cross_encoder_scores
-    ):
-
-        payload = document.payload or {}
-
-        text = payload.get(
-            "text",
-            ""
-        )
+    for document, cross_score in zip(documents, cross_encoder_scores):
+        text = document.get("text", "")
 
         metric_score = calculate_metric_relevance(
             text,
@@ -193,16 +175,11 @@ def rerank_documents(
 
         ranked_documents.append(
             {
+                **document,
+                "score": final_score,
                 "rerank_score": final_score,
-
-                "cross_encoder_score":
-                    float(cross_score),
-
-                "metric_score":
-                    metric_score,
-
-                "document":
-                    document
+                "cross_encoder_score": float(cross_score),
+                "metric_score": metric_score,
             }
         )
 

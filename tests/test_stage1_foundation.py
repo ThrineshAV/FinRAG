@@ -8,6 +8,10 @@ import numpy as np
 from src.embeddings import embedder
 from src.ingestion.sec_ingestion import extract_pdf_pages
 from src.processing.chunker import create_page_chunks
+from src.retrieval.reranker import rerank_documents
+from src.retrieval.query_parser import parse_query
+from src.generation import llm
+from src.evaluation.metrics import evaluate_retrieval
 
 
 def create_test_pdf(path: Path) -> None:
@@ -64,3 +68,83 @@ def test_faiss_store_round_trip(tmp_path: Path, monkeypatch) -> None:
     assert index.ntotal == 1
     assert metadata[0]["chunk_id"] == "apple-p1-c0"
     assert metadata[0]["company"] == "Apple"
+
+
+def test_reranker_supports_faiss_records() -> None:
+    class FakeModel:
+        def predict(self, pairs):
+            return [0.2, 0.8]
+
+    documents = [
+        {"chunk_id": "first", "text": "Revenue was reported."},
+        {"chunk_id": "second", "text": "Net income was reported."},
+    ]
+
+    results = rerank_documents(
+        "What was net income?",
+        documents,
+        top_k=1,
+        metric="net income",
+        model=FakeModel(),
+    )
+
+    assert results[0]["chunk_id"] == "second"
+    assert results[0]["metric_score"] == 1.0
+
+
+def test_query_parser_detects_multiple_companies() -> None:
+    parsed = parse_query("Compare Apple's and Microsoft's revenue in 2025")
+
+    assert parsed["tickers"] == ["AAPL", "MSFT"]
+    assert parsed["ticker"] == "AAPL"
+
+
+def test_openai_generation_uses_grounded_context(monkeypatch) -> None:
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"choices": [{"message": {"content": "Apple reported $10."}}]}
+
+    captured = {}
+
+    def fake_post(url, **kwargs):
+        captured["url"] = url
+        captured["payload"] = kwargs["json"]
+        return FakeResponse()
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(llm.requests, "post", fake_post)
+
+    answer = llm.generate_openai_answer(
+        "What was Apple's net income?",
+        "Source: apple-2024; Page: 4\nNet income was $10.",
+    )
+
+    assert answer == "Apple reported $10."
+    assert captured["payload"]["messages"][1]["content"].startswith("SOURCES:")
+    assert "Net income was $10." in captured["payload"]["messages"][1]["content"]
+
+
+def test_retrieval_metrics_calculate_hit_rate_and_mrr() -> None:
+    responses = {
+        "first question": [{"chunk_id": "wrong"}, {"chunk_id": "target-1"}],
+        "second question": [{"chunk_id": "target-2"}],
+    }
+
+    metrics = evaluate_retrieval(
+        [
+            {"question": "first question", "relevant_chunk_ids": ["target-1"]},
+            {"question": "second question", "relevant_chunk_ids": ["target-2"]},
+        ],
+        lambda question, top_k: responses[question][:top_k],
+        top_k=3,
+    )
+
+    assert metrics == {
+        "cases": 2,
+        "hit_rate": 1.0,
+        "mrr": 0.75,
+        "average_retrieved": 1.5,
+    }

@@ -8,6 +8,7 @@ import numpy as np
 
 from src.embeddings.embedder import get_embedding_model, load_vector_store
 from src.retrieval.query_parser import parse_query
+from src.retrieval.reranker import rerank_documents
 
 
 TOP_K = 5
@@ -16,7 +17,7 @@ TOP_K = 5
 def retrieve_documents(
     query: str,
     top_k: int = TOP_K,
-    filters: dict[str, str | None] | None = None,
+    filters: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Retrieve relevant chunks and return them with parsed query data."""
     if not query.strip():
@@ -33,7 +34,7 @@ def retrieve_documents(
     scores, indices = index.search(np.asarray(query_vector, dtype="float32"), candidate_count)
 
     filters = {
-        "ticker": parsed_query.get("ticker"),
+        "ticker": parsed_query.get("tickers") or parsed_query.get("ticker"),
         "fiscal_year": parsed_query.get("fiscal_year"),
         "filing_type": parsed_query.get("filing_type"),
         "document_type": None,
@@ -45,10 +46,19 @@ def retrieve_documents(
         if index_position < 0:
             continue
         record = metadata[index_position]
-        if all(not value or record.get(key) == value for key, value in filters.items()):
+        if all(
+            not value
+            or (record.get(key) in value if isinstance(value, list) else record.get(key) == value)
+            for key, value in filters.items()
+        ):
             results.append({"score": float(score), **record})
-        if len(results) == top_k:
-            break
+
+    results = rerank_documents(
+        query,
+        results,
+        top_k=top_k,
+        metric=parsed_query.get("metric"),
+    )
 
     return results, parsed_query
 
