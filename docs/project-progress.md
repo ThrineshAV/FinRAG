@@ -262,6 +262,14 @@ loaded, returning `503` when query dependencies are unavailable.
 
 API integration tests cover health and readiness responses, query fallback and
 missing-index errors, citation formatting, and invalid upload rejection.
+
+### 3.12 Containerization
+
+Files: `Dockerfile`, `.dockerignore`
+
+The API can run in a Python 3.12 container. Large local artifacts and secrets
+are excluded from the image; a prepared `vector_db` directory must be mounted
+at runtime for query readiness.
 ```
 
 ## 4. Git Milestones

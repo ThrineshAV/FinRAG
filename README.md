@@ -172,6 +172,24 @@ python -m src.evaluation.benchmark
 Replace the starter cases' `relevant_chunk_ids` with verified IDs from the
 indexed corpus before using the reported scores for comparison.
 
+## Run With Docker
+
+Build and run the API container:
+
+```powershell
+docker build -t finsight-rag .
+docker run --rm -p 8000:8000 --env-file .env finsight-rag
+```
+
+The image intentionally excludes local FAISS artifacts. Mount a prepared
+`vector_db` directory at `/app/vector_db` when serving indexed documents:
+
+```powershell
+docker run --rm -p 8000:8000 --env-file .env -v "${PWD}\vector_db:/app/vector_db" finsight-rag
+```
+
+Check `/health` for process liveness and `/ready` for vector-store readiness.
+
 ## Existing SEC Download Flow
 
 To download the latest 10-K for a supported company:
