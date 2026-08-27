@@ -12,6 +12,8 @@ from src.retrieval.reranker import rerank_documents
 from src.retrieval.query_parser import parse_query
 from src.generation import llm
 from src.evaluation.metrics import evaluate_retrieval
+from src.api import app
+from fastapi.testclient import TestClient
 
 
 def create_test_pdf(path: Path) -> None:
@@ -148,3 +150,24 @@ def test_retrieval_metrics_calculate_hit_rate_and_mrr() -> None:
         "mrr": 0.75,
         "average_retrieved": 1.5,
     }
+
+
+def test_api_adds_request_observability_headers() -> None:
+    response = TestClient(app).get("/health", headers={"X-Request-ID": "test-request"})
+
+    assert response.status_code == 200
+    assert response.headers["X-Request-ID"] == "test-request"
+    assert float(response.headers["X-Process-Time-Ms"]) >= 0
+
+
+def test_api_readiness_reports_unavailable_store(monkeypatch) -> None:
+    from src import api
+
+    def unavailable_store():
+        raise FileNotFoundError("missing index")
+
+    monkeypatch.setattr(api, "load_vector_store", unavailable_store)
+    response = TestClient(api.app).get("/ready")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Vector store is unavailable"}

@@ -19,6 +19,7 @@ Stage 1 foundation is partially complete:
 - FastAPI endpoints are available in `src/api.py`.
 - Grounded OpenAI answer generation is available when `OPENAI_API_KEY` is set.
 - A deterministic retrieval benchmark reports hit rate and MRR.
+- API responses include request IDs and processing-time headers for tracing.
 - Existing Ollama answer generation remains available in `src/generation/llm.py`.
 
 The project is not production-ready yet. OpenAI generation,
@@ -120,7 +121,13 @@ http://127.0.0.1:8000/docs
 
 `GET /health`
 
-Returns the service status.
+Returns the service status. API responses include `X-Request-ID` and
+`X-Process-Time-Ms` headers.
+
+`GET /ready`
+
+Checks that the FAISS vector store is available. Returns `503` until the
+index and metadata are ready.
 
 `POST /upload`
 
@@ -187,5 +194,4 @@ suite is still to be added.
 
 1. Finish and test the Stage 1 foundation.
 2. Curate the full 30-question evaluation benchmark.
-3. Add production concerns such as structured logging, middleware, Docker,
-	 health checks, integration tests, and deployment documentation.
+3. Add Docker, integration tests, and deployment documentation.

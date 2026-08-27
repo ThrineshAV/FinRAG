@@ -248,6 +248,17 @@ The project now includes a benchmark runner that calculates hit rate, mean
 reciprocal rank, and average retrieved results. The included JSON cases are a
 starter template and require verified `relevant_chunk_ids` before production
 evaluation.
+
+### 3.11 API observability
+
+File: `src/api.py`
+
+The API middleware now preserves or generates an `X-Request-ID`, adds an
+`X-Process-Time-Ms` response header, and emits structured request log fields
+for method, path, status, request ID, and duration.
+
+The `/ready` endpoint separately verifies that the FAISS vector store can be
+loaded, returning `503` when query dependencies are unavailable.
 ```
 
 ## 4. Git Milestones

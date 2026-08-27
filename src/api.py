@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import time
+from uuid import uuid4
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
@@ -12,6 +14,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 
 from src.embeddings.embedder import generate_embeddings, store_embeddings
+from src.embeddings.embedder import load_vector_store
 from src.ingestion.sec_ingestion import extract_pdf_pages
 from src.processing.chunker import create_page_chunks
 from src.generation.llm import generate_openai_answer, is_openai_configured
@@ -20,6 +23,26 @@ from src.retrieval.retriever import retrieve_documents
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="FinSight-RAG", version="1.0.0")
+
+
+@app.middleware("http")
+async def request_logging_middleware(request, call_next):
+    """Attach a request ID and log request duration for every response."""
+    request_id = request.headers.get("X-Request-ID", str(uuid4()))
+    started_at = time.perf_counter()
+    response = await call_next(request)
+    duration_ms = (time.perf_counter() - started_at) * 1000
+    response.headers["X-Request-ID"] = request_id
+    response.headers["X-Process-Time-Ms"] = f"{duration_ms:.2f}"
+    logger.info(
+        "api_request method=%s path=%s status=%s request_id=%s duration_ms=%.2f",
+        request.method,
+        request.url.path,
+        response.status_code,
+        request_id,
+        duration_ms,
+    )
+    return response
 
 
 class QueryRequest(BaseModel):
@@ -62,6 +85,17 @@ class UploadResponse(BaseModel):
 async def health() -> dict[str, str]:
     """Return service liveness."""
     return {"status": "ok"}
+
+
+@app.get("/ready")
+async def readiness() -> dict[str, str]:
+    """Report whether the vector store is ready to serve queries."""
+    try:
+        load_vector_store()
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        logger.warning("Vector store is not ready: %s", exc)
+        raise HTTPException(status_code=503, detail="Vector store is unavailable") from exc
+    return {"status": "ready"}
 
 
 @app.post("/upload", response_model=UploadResponse, status_code=status.HTTP_201_CREATED)
