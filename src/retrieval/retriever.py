@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import numpy as np
@@ -12,6 +13,24 @@ from src.retrieval.reranker import rerank_documents
 
 
 TOP_K = 5
+
+
+def _matches_filter(record: dict[str, Any], key: str, value: Any) -> bool:
+    """Match metadata filters without rejecting common company name variants."""
+    record_value = record.get(key)
+    if isinstance(value, list):
+        return any(_matches_filter(record, key, item) for item in value)
+    if key != "company" or not isinstance(record_value, str) or not isinstance(value, str):
+        return record_value == value
+
+    normalize = lambda text: text.lower().replace(",", "").replace(".", "").strip()
+    normalized_record = normalize(record_value)
+    normalized_value = normalize(value)
+    legal_suffixes = (" inc", " corporation", " corp", " com", " company")
+    for suffix in legal_suffixes:
+        normalized_record = normalized_record.removesuffix(suffix).strip()
+        normalized_value = normalized_value.removesuffix(suffix).strip()
+    return normalized_record == normalized_value
 
 
 def retrieve_documents(
@@ -48,17 +67,20 @@ def retrieve_documents(
         record = metadata[index_position]
         if all(
             not value
-            or (record.get(key) in value if isinstance(value, list) else record.get(key) == value)
+            or _matches_filter(record, key, value)
             for key, value in filters.items()
         ):
             results.append({"score": float(score), **record})
 
-    results = rerank_documents(
-        query,
-        results,
-        top_k=top_k,
-        metric=parsed_query.get("metric"),
-    )
+    if os.getenv("ENABLE_RERANKING", "true").lower() in {"1", "true", "yes"}:
+        results = rerank_documents(
+            query,
+            results,
+            top_k=top_k,
+            metric=parsed_query.get("metric"),
+        )
+    else:
+        results = results[:top_k]
 
     return results, parsed_query
 

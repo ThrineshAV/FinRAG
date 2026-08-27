@@ -139,8 +139,8 @@ Accepts a PDF multipart upload with these form fields:
 - `fiscal_year`
 - `quarter`
 
-The PDF is extracted, split into page-aware chunks, embedded, and stored in
-FAISS.
+The PDF is extracted, split into page-aware chunks, embedded, and appended to
+FAISS. Existing indexed documents are preserved.
 
 `POST /query`
 
@@ -187,6 +187,10 @@ The image intentionally excludes local FAISS artifacts. Mount a prepared
 ```powershell
 docker run --rm -p 8000:8000 --env-file .env -v "${PWD}\vector_db:/app/vector_db" finsight-rag
 ```
+
+Docker disables cross-encoder reranking by default to reduce memory use. Set
+`-e ENABLE_RERANKING=true` when the Docker engine has enough memory for both
+embedding and reranking models.
 
 Check `/health` for process liveness and `/ready` for vector-store readiness.
 

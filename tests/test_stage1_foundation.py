@@ -10,6 +10,7 @@ from src.ingestion.sec_ingestion import extract_pdf_pages
 from src.processing.chunker import create_page_chunks
 from src.retrieval.reranker import rerank_documents
 from src.retrieval.query_parser import parse_query
+from src.retrieval.retriever import _matches_filter
 from src.generation import llm
 from src.evaluation.metrics import evaluate_retrieval
 from src.api import app
@@ -71,6 +72,21 @@ def test_faiss_store_round_trip(tmp_path: Path, monkeypatch) -> None:
     assert metadata[0]["chunk_id"] == "apple-p1-c0"
     assert metadata[0]["company"] == "Apple"
 
+    additional_chunk = [{
+        "chunk_id": "microsoft-p1-c0",
+        "chunk_index": 0,
+        "text": "Microsoft revenue",
+        "metadata": {"company": "Microsoft", "page_number": 1},
+    }]
+    embedder.store_embeddings(additional_chunk, np.array([[0.0, 1.0]], dtype="float32"))
+    appended_index, appended_metadata = embedder.load_vector_store()
+
+    assert appended_index.ntotal == 2
+    assert [item["chunk_id"] for item in appended_metadata] == [
+        "apple-p1-c0",
+        "microsoft-p1-c0",
+    ]
+
 
 def test_reranker_supports_faiss_records() -> None:
     class FakeModel:
@@ -99,6 +115,10 @@ def test_query_parser_detects_multiple_companies() -> None:
 
     assert parsed["tickers"] == ["AAPL", "MSFT"]
     assert parsed["ticker"] == "AAPL"
+
+
+def test_company_filter_accepts_common_legal_name_variant() -> None:
+    assert _matches_filter({"company": "Apple Inc."}, "company", "Apple")
 
 
 def test_openai_generation_uses_grounded_context(monkeypatch) -> None:

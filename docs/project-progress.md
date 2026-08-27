@@ -169,7 +169,8 @@ Accepts a PDF multipart upload and these fields:
 - `quarter`
 
 The endpoint runs PDF extraction, page-aware chunking, embedding, and FAISS
-persistence.
+persistence. Uploaded chunks append to the existing FAISS store, preserving
+previously indexed documents.
 
 #### `POST /query`
 
@@ -269,7 +270,8 @@ Files: `Dockerfile`, `.dockerignore`
 
 The API can run in a Python 3.12 container. Large local artifacts and secrets
 are excluded from the image; a prepared `vector_db` directory must be mounted
-at runtime for query readiness.
+at runtime for query readiness. Cross-encoder reranking is disabled by default
+in Docker to avoid out-of-memory kills; it remains enabled by default locally.
 ```
 
 ## 4. Git Milestones

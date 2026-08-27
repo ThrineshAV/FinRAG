@@ -56,15 +56,13 @@ def generate_embeddings(chunks: list[dict[str, Any]]) -> np.ndarray:
 
 
 def store_embeddings(chunks: list[dict[str, Any]], embeddings: np.ndarray) -> None:
-    """Persist a cosine-similarity FAISS index and aligned metadata."""
+    """Append chunks to, or create, a cosine-similarity FAISS store."""
     vectors = np.asarray(embeddings, dtype="float32")
     if len(chunks) != len(vectors):
         raise ValueError("Each chunk must have one embedding")
     if vectors.ndim != 2 or not len(vectors):
         raise ValueError("Embeddings must be a non-empty matrix")
 
-    index = faiss.IndexFlatIP(vectors.shape[1])
-    index.add(vectors)
     metadata = [
         {
             "chunk_id": chunk.get("chunk_id", str(chunk["chunk_index"])),
@@ -74,6 +72,16 @@ def store_embeddings(chunks: list[dict[str, Any]], embeddings: np.ndarray) -> No
         }
         for chunk in chunks
     ]
+
+    if INDEX_PATH.exists() and METADATA_PATH.exists():
+        index, existing_metadata = load_vector_store()
+        if index.d != vectors.shape[1]:
+            raise ValueError("Embedding dimensions do not match the existing index")
+        index.add(vectors)
+        metadata = existing_metadata + metadata
+    else:
+        index = faiss.IndexFlatIP(vectors.shape[1])
+        index.add(vectors)
 
     VECTOR_DB_DIR.mkdir(parents=True, exist_ok=True)
     faiss.write_index(index, str(INDEX_PATH))
