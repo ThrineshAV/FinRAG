@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json as _json
 import logging
 import time
 from uuid import uuid4
@@ -11,14 +12,19 @@ from typing import Any
 
 import requests
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
+from openai import OpenAIError
 from pydantic import BaseModel, Field
 
 from src.embeddings.embedder import generate_embeddings, store_embeddings
 from src.embeddings.embedder import load_vector_store
 from src.ingestion.sec_ingestion import extract_pdf_pages
 from src.processing.chunker import create_page_chunks
-from src.generation.llm import generate_openai_answer, is_openai_configured
+from src.generation.llm import (
+    generate_openai_answer,
+    generate_openai_answer_stream,
+    is_openai_configured,
+)
 from src.retrieval.retriever import retrieve_documents
 
 logger = logging.getLogger(__name__)
@@ -193,11 +199,22 @@ async def query_documents(request: QueryRequest) -> QueryResponse:
             )
             try:
                 answer = generate_openai_answer(request.question, context)
-            except (ValueError, requests.RequestException, KeyError, IndexError) as exc:
+            except (ValueError, OpenAIError, KeyError, IndexError) as exc:
                 logger.error("Grounded answer generation failed: %s", exc)
                 raise HTTPException(status_code=502, detail="Answer generation failed") from exc
 
-    citations = [
+    citations = _build_citations(results)
+    return QueryResponse(
+        answer=answer,
+        retrieved_chunks=[result.get("text", "") for result in results],
+        metadata=results,
+        citations=citations,
+    )
+
+
+def _build_citations(results: list[dict[str, Any]]) -> list[Citation]:
+    """Build citation records from retrieval results."""
+    return [
         Citation(
             chunk_id=str(result.get("chunk_id", result.get("chunk_index", "unknown"))),
             source=str(
@@ -215,9 +232,63 @@ async def query_documents(request: QueryRequest) -> QueryResponse:
         )
         for result in results
     ]
-    return QueryResponse(
-        answer=answer,
-        retrieved_chunks=[result.get("text", "") for result in results],
-        metadata=results,
-        citations=citations,
+
+
+def _build_context(results: list[dict[str, Any]]) -> str:
+    """Format retrieval results into a context string for generation."""
+    return "\n\n".join(
+        f"Source: {result.get('source', result.get('document_id', 'unknown'))}; "
+        f"Page: {result.get('page_number', 'unknown')}\n{result.get('text', '')}"
+        for result in results
     )
+
+
+@app.post("/query/stream")
+async def query_documents_stream(request: QueryRequest) -> StreamingResponse:
+    """Stream an answer as Server-Sent Events (SSE).
+
+    Retrieval + reranking happen synchronously before the stream starts.
+    Only the LLM generation phase streams token-by-token.
+
+    Event format:
+    - ``data: {"token": "..."}`` for each answer token
+    - ``data: {"done": true, "citations": [...]}`` as the final event
+    """
+    if not is_openai_configured():
+        raise HTTPException(
+            status_code=400,
+            detail="Streaming requires OPENAI_API_KEY to be configured",
+        )
+
+    try:
+        results, _ = retrieve_documents(
+            request.question,
+            top_k=request.top_k,
+            filters={
+                "company": request.company,
+                "fiscal_year": request.fiscal_year,
+                "filing_type": request.filing_type,
+                "document_type": request.document_type,
+                "quarter": request.quarter,
+            },
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    if not results:
+        raise HTTPException(status_code=404, detail="No relevant information was found")
+
+    context = _build_context(results)
+    citations = _build_citations(results)
+
+    def event_generator():
+        try:
+            for token in generate_openai_answer_stream(request.question, context):
+                yield f"data: {_json.dumps({'token': token})}\n\n"
+        except (ValueError, OpenAIError) as exc:
+            logger.error("Streaming generation failed: %s", exc)
+            yield f"data: {_json.dumps({'error': str(exc)})}\n\n"
+            return
+        yield f"data: {_json.dumps({'done': True, 'citations': [c.model_dump() for c in citations]})}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")

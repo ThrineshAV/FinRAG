@@ -122,22 +122,28 @@ def test_company_filter_accepts_common_legal_name_variant() -> None:
 
 
 def test_openai_generation_uses_grounded_context(monkeypatch) -> None:
-    class FakeResponse:
-        def raise_for_status(self):
-            pass
+    from unittest.mock import MagicMock
 
-        def json(self):
-            return {"choices": [{"message": {"content": "Apple reported $10."}}]}
+    captured: dict = {}
 
-    captured = {}
+    class FakeMessage:
+        content = "Apple reported $10."
 
-    def fake_post(url, **kwargs):
-        captured["url"] = url
-        captured["payload"] = kwargs["json"]
-        return FakeResponse()
+    class FakeChoice:
+        message = FakeMessage()
+
+    class FakeCompletion:
+        choices = [FakeChoice()]
+
+    def fake_create(**kwargs):
+        captured.update(kwargs)
+        return FakeCompletion()
+
+    fake_client = MagicMock()
+    fake_client.chat.completions.create.side_effect = fake_create
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setattr(llm.requests, "post", fake_post)
+    monkeypatch.setattr(llm, "_get_openai_client", lambda: fake_client)
 
     answer = llm.generate_openai_answer(
         "What was Apple's net income?",
@@ -145,8 +151,8 @@ def test_openai_generation_uses_grounded_context(monkeypatch) -> None:
     )
 
     assert answer == "Apple reported $10."
-    assert captured["payload"]["messages"][1]["content"].startswith("SOURCES:")
-    assert "Net income was $10." in captured["payload"]["messages"][1]["content"]
+    assert captured["messages"][1]["content"].startswith("SOURCES:")
+    assert "Net income was $10." in captured["messages"][1]["content"]
 
 
 def test_retrieval_metrics_calculate_hit_rate_and_mrr() -> None:

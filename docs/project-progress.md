@@ -253,11 +253,21 @@ The current tests verify:
 - **(Stage 2)** Single-result confidence is 1.0.
 - **(Stage 2)** Reranker respects `top_k`.
 - **(Stage 2)** Default model is `BAAI/bge-reranker-base` and is configurable.
+- **(Stage 3)** OpenAI SDK sends a grounded prompt with context.
+- **(Stage 3)** Streaming yields individual token deltas.
+- **(Stage 3)** `/query/stream` SSE endpoint returns token events and a
+   final done event with citations.
+- **(Stage 3)** Comparison prompt detects multiple companies.
+- **(Stage 3)** Single-company context uses the standard prompt.
+- **(Stage 3)** Faithfulness score detects hallucinated content.
+- **(Stage 3)** Relevance score checks that the requested metric appears
+   in the answer.
 
 The latest test run passed:
 
 ```text
-45 passed
+52 passed
+```
 
 ### 3.10 Evaluation
 
@@ -321,6 +331,45 @@ Stage 2 upgraded retrieval quality across four areas:
    metric boosts promote matching documents, that confidence is correctly
    normalized, and that the model name is configurable.
 
+### 3.14 Stage 3 — Answer generation and evaluation
+
+Files: `src/generation/llm.py`, `src/api.py`, `src/evaluation/metrics.py`,
+`src/evaluation/benchmark.py`, `tests/test_generation.py`
+
+Stage 3 upgraded the generation module and added evaluation metrics:
+
+1. **OpenAI SDK migration** — Replaced raw `requests.post` calls with the
+   official `openai` Python SDK. The non-streaming `generate_openai_answer()`
+   function now uses `client.chat.completions.create()`. Model, temperature,
+   and max tokens are configurable via `OPENAI_MODEL`, `OPENAI_TEMPERATURE`,
+   and `OPENAI_MAX_TOKENS` environment variables.
+
+2. **Streaming generation** — Added `generate_openai_answer_stream()` that
+   yields token deltas via the SDK's streaming API (`stream=True`). The
+   `POST /query/stream` endpoint wraps this as Server-Sent Events (SSE),
+   emitting `{"token": "..."}` events followed by a final
+   `{"done": true, "citations": [...]}` event.
+
+3. **Comparison-aware prompts** — The new `_build_system_prompt()` helper
+   inspects retrieved source lines for multiple company identifiers. When two
+   or more companies are detected, the system prompt instructs the model to
+   structure the answer as a side-by-side comparison.
+
+4. **Answer quality metrics** — `evaluate_answer_quality()` in
+   `src/evaluation/metrics.py` scores generated answers on two axes:
+   - **Faithfulness**: extractive token overlap between the answer and context.
+     A fully grounded answer scores close to 1.0.
+   - **Relevance**: whether the answer addresses the financial metric from the
+     question (detected via `query_parser`).
+
+5. **Benchmark expansion** — `benchmark.py` now accepts
+   `--include-generation` to run generation on each evaluation case and report
+   `avg_faithfulness` and `avg_relevance` alongside retrieval metrics.
+
+6. **Generation tests** — Seven new tests in `tests/test_generation.py` cover
+   SDK prompt formatting, streaming token deltas, SSE endpoint events,
+   comparison prompt detection, faithfulness scoring, and relevance scoring.
+
 ## 4. Git Milestones
 
 ### `2e7d031` - Initial FinSight-RAG pipeline
@@ -366,6 +415,7 @@ The main dependencies used by the current implementation are:
 - `langchain-text-splitters` for existing SEC text chunking
 - `beautifulsoup4` and `lxml` for SEC HTML parsing
 - `requests` for SEC and Ollama HTTP calls
+- `openai` for grounded answer generation (SDK)
 - `pydantic` for API validation
 - `pytest` for tests
 
@@ -416,12 +466,11 @@ python -m src.ingestion.sec_ingestion --company apple
 The project is a functional foundation, not a finished production service.
 The main gaps are:
 
-- Streaming-ready answer generation.
-- Multi-company comparison workflows.
 - Benchmark evaluation cases need verified `relevant_chunk_ids` from the
   indexed corpus (30 questions are defined in `data/evaluation.json`).
 - Authentication, rate limiting, and request limits.
 - Complete unit and integration test coverage.
+- Performance profiling and optimization.
 
 The following items have been completed since the initial progress log:
 
@@ -434,22 +483,26 @@ The following items have been completed since the initial progress log:
 - 30-case benchmark dataset defined in `data/evaluation.json`.
 - Structured exception handler added to the API.
 - Docker and deployment configuration.
+- Streaming-ready answer generation via SSE (`/query/stream`).
+- Multi-company comparison-aware generation prompts.
+- Answer quality metrics (faithfulness, relevance).
 
 ## 8. Next Planned Stage
 
-The next planned feature is Stage 3: answer generation and evaluation.
+The next planned feature is Stage 4: production hardening and evaluation.
 
-Stage 2 (retrieval quality improvement) is complete. The reranker has been
-upgraded to `BAAI/bge-reranker-base`, candidate counts are configurable,
-confidence signals are surfaced in the API, and reranking behavior is covered
-by 7 dedicated tests.
+Stage 3 (answer generation and evaluation) is complete. The generation module
+now uses the OpenAI SDK with streaming support, comparison-aware prompts detect
+multi-company questions, and answer quality metrics (faithfulness, relevance)
+are integrated into the benchmark runner.
 
-Stage 3 should focus on:
+Stage 4 should focus on:
 
-- Streaming-ready grounded answer generation.
-- Evaluation harness improvements with verified `relevant_chunk_ids`.
-- Answer quality metrics (faithfulness, relevance).
-- Multi-company comparison workflows.
+- Verified `relevant_chunk_ids` in the evaluation dataset.
+- Authentication and rate limiting for the API.
+- Comprehensive error handling and input validation.
+- Performance profiling and optimization.
+- CI/CD pipeline and deployment automation.
 
 ## 9. Design Decisions To Remember
 
