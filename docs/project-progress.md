@@ -129,11 +129,12 @@ The retriever now:
 1. Validates the question and `top_k` value.
 2. Parses the question.
 3. Embeds the question.
-4. Searches the FAISS index.
-5. Oversamples candidates before filtering.
-6. Applies metadata filters such as ticker, fiscal year, filing type, company,
+4. Searches the FAISS index with a configurable candidate count
+   (default: `top_k * 4`, clamped to `[top_k, index.ntotal]`).
+5. Applies metadata filters such as ticker, fiscal year, filing type, company,
    document type, and quarter when values are available.
-7. Returns text, scores, chunk identifiers, and metadata.
+6. Reranks filtered candidates (when enabled) and returns text, scores,
+   chunk identifiers, reranking scores, confidence, and metadata.
 
 The query parser preserves the first detected company for backward
 compatibility and also exposes all detected company names and tickers. FAISS
@@ -187,10 +188,12 @@ Accepts a validated request such as:
 
 Returns:
 
-- A retrieval status message
+- A retrieval status message (or grounded LLM answer when OpenAI is configured)
 - Retrieved text chunks
 - Metadata for each chunk
-- Citation records with chunk ID, page number, source, and score
+- Citation records with chunk ID, page number, source, score, and
+  optional reranking fields (`rerank_score`, `cross_encoder_score`,
+  `metric_score`, `confidence`)
 
 The current response intentionally reports retrieved evidence. Full grounded
 LLM answer synthesis is planned for a later stage.
@@ -215,14 +218,23 @@ still uses the existing Ollama generation module.
 
 File: `src/retrieval/reranker.py`
 
-Retrieval now reranks metadata-filtered FAISS candidates with the
-`cross-encoder/ms-marco-MiniLM-L-6-v2` model. Financial metric matches receive
-an additional relevance boost. The cross-encoder loads lazily, and reranking
-uses the flattened dictionary records produced by the FAISS store.
+Retrieval now reranks metadata-filtered FAISS candidates with `BAAI/bge-reranker-base`
+(upgraded from `cross-encoder/ms-marco-MiniLM-L-6-v2` in Stage 2). The model name
+is configurable via the `RERANKER_MODEL` environment variable. Financial metric
+matches receive an additional relevance boost. The cross-encoder loads lazily, and
+reranking uses the flattened dictionary records produced by the FAISS store.
+
+Each reranked result now carries:
+
+- `rerank_score` — combined cross-encoder + metric boost score
+- `cross_encoder_score` — raw cross-encoder output
+- `metric_score` — financial metric relevance (0.0 or 1.0)
+- `confidence` — min-max normalized score within the result set (0.0–1.0)
 
 ### 3.9 Tests
 
-File: `tests/test_stage1_foundation.py`
+File: `tests/test_stage1_foundation.py`, `tests/test_reranking.py`,
+`tests/test_edge_cases.py`, `tests/test_api_integration.py`
 
 The current tests verify:
 
@@ -234,11 +246,18 @@ The current tests verify:
 - Grounded OpenAI request formatting is covered with a mocked provider.
 - Retrieval hit rate and mean reciprocal rank are covered with deterministic
    test data.
+- **(Stage 2)** Reranker reorders documents by semantic relevance.
+- **(Stage 2)** Metric boost promotes matching documents when cross-encoder
+   scores are equal.
+- **(Stage 2)** Confidence scores are normalized to 0.0–1.0.
+- **(Stage 2)** Single-result confidence is 1.0.
+- **(Stage 2)** Reranker respects `top_k`.
+- **(Stage 2)** Default model is `BAAI/bge-reranker-base` and is configurable.
 
 The latest test run passed:
 
 ```text
-6 passed
+45 passed
 
 ### 3.10 Evaluation
 
@@ -273,6 +292,34 @@ are excluded from the image; a prepared `vector_db` directory must be mounted
 at runtime for query readiness. Cross-encoder reranking is disabled by default
 in Docker to avoid out-of-memory kills; it remains enabled by default locally.
 ```
+
+### 3.13 Stage 2 — Retrieval quality improvement
+
+Files: `src/retrieval/reranker.py`, `src/retrieval/retriever.py`,
+`src/api.py`, `tests/test_reranking.py`
+
+Stage 2 upgraded retrieval quality across four areas:
+
+1. **Reranker model upgrade** — Switched from `cross-encoder/ms-marco-MiniLM-L-6-v2`
+   to `BAAI/bge-reranker-base`, which provides stronger relevance judgments for
+   domain-specific financial text. The model name is now configurable via the
+   `RERANKER_MODEL` environment variable.
+
+2. **Configurable candidate count** — `retrieve_documents()` accepts an optional
+   `candidate_count` parameter. The default oversampling was reduced from
+   `top_k * 10` to `top_k * 4`, which is sufficient headroom for metadata
+   filtering without wasting search time on large indices. The count is clamped
+   to `[top_k, index.ntotal]`.
+
+3. **Confidence signals** — Each reranked result now includes a `confidence`
+   field (0.0–1.0) calculated via min-max normalization of the rerank scores
+   within the result set. The API `Citation` model surfaces `rerank_score`,
+   `cross_encoder_score`, `metric_score`, and `confidence` as optional fields.
+
+4. **Reranking tests** — Seven new tests in `tests/test_reranking.py` prove
+   that the reranker changes ordering when semantic relevance differs, that
+   metric boosts promote matching documents, that confidence is correctly
+   normalized, and that the model name is configurable.
 
 ## 4. Git Milestones
 
@@ -390,33 +437,19 @@ The following items have been completed since the initial progress log:
 
 ## 8. Next Planned Stage
 
-The next planned feature is Stage 2: retrieval quality improvement.
+The next planned feature is Stage 3: answer generation and evaluation.
 
-Target flow:
+Stage 2 (retrieval quality improvement) is complete. The reranker has been
+upgraded to `BAAI/bge-reranker-base`, candidate counts are configurable,
+confidence signals are surfaced in the API, and reranking behavior is covered
+by 7 dedicated tests.
 
-```text
-Question
-   |
-   v
-Embedding
-   |
-   v
-FAISS top 20 candidates
-   |
-   v
-BAAI/bge-reranker-base
-   |
-   v
-Best 5 chunks
-   |
-   v
-Grounded answer generation
-```
+Stage 3 should focus on:
 
-Stage 2 should add a FAISS-compatible reranker interface, configurable
-candidate and final-result counts, reranking scores, confidence information,
-and tests proving that the reranker changes ordering when semantic relevance
-improves.
+- Streaming-ready grounded answer generation.
+- Evaluation harness improvements with verified `relevant_chunk_ids`.
+- Answer quality metrics (faithfulness, relevance).
+- Multi-company comparison workflows.
 
 ## 9. Design Decisions To Remember
 

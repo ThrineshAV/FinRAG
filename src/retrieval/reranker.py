@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 from typing import Any
 
@@ -10,7 +11,7 @@ from sentence_transformers import CrossEncoder
 # Configuration
 # ============================================================
 
-RERANKER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+RERANKER_MODEL = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-base")
 
 # Weight used for the financial metric relevance
 METRIC_BOOST = 1.5
@@ -196,7 +197,28 @@ def rerank_documents(
     # Return top K
     # --------------------------------------------------------
 
-    return ranked_documents[:top_k]
+    ranked_documents = ranked_documents[:top_k]
+
+    # --------------------------------------------------------
+    # Normalize confidence to 0-1 via min-max scaling
+    # --------------------------------------------------------
+
+    if len(ranked_documents) <= 1:
+        for doc in ranked_documents:
+            doc["confidence"] = 1.0
+    else:
+        scores = [doc["rerank_score"] for doc in ranked_documents]
+        min_score = min(scores)
+        max_score = max(scores)
+        score_range = max_score - min_score
+        for doc in ranked_documents:
+            doc["confidence"] = (
+                (doc["rerank_score"] - min_score) / score_range
+                if score_range > 0
+                else 1.0
+            )
+
+    return ranked_documents
 
 
 # ============================================================

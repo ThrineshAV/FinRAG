@@ -39,6 +39,7 @@ def retrieve_documents(
     query: str,
     top_k: int = TOP_K,
     filters: dict[str, Any] | None = None,
+    candidate_count: int | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Retrieve relevant chunks and return them with parsed query data."""
     if not query.strip():
@@ -51,7 +52,9 @@ def retrieve_documents(
     query_vector = get_embedding_model().encode(
         [query], normalize_embeddings=True, convert_to_numpy=True
     )
-    candidate_count = min(max(top_k * 10, top_k), index.ntotal)
+    if candidate_count is None:
+        candidate_count = top_k * 4
+    candidate_count = min(max(candidate_count, top_k), index.ntotal)
     scores, indices = index.search(np.asarray(query_vector, dtype="float32"), candidate_count)
 
     explicit = filters or {}

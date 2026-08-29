@@ -55,6 +55,10 @@ def test_query_returns_retrieved_evidence_without_openai(monkeypatch) -> None:
         "source": "apple-2025",
         "page_number": 4,
         "score": 0.91,
+        "rerank_score": None,
+        "cross_encoder_score": None,
+        "metric_score": None,
+        "confidence": None,
     }]
 
 

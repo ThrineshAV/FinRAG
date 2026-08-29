@@ -81,6 +81,10 @@ class Citation(BaseModel):
     source: str
     page_number: int | str
     score: float
+    rerank_score: float | None = None
+    cross_encoder_score: float | None = None
+    metric_score: float | None = None
+    confidence: float | None = None
 
 
 class QueryResponse(BaseModel):
@@ -204,6 +208,10 @@ async def query_documents(request: QueryRequest) -> QueryResponse:
             ),
             page_number=result.get("page_number", "unknown"),
             score=round(float(result.get("score", 0.0)), 4),
+            rerank_score=round(float(result["rerank_score"]), 4) if "rerank_score" in result else None,
+            cross_encoder_score=round(float(result["cross_encoder_score"]), 4) if "cross_encoder_score" in result else None,
+            metric_score=round(float(result["metric_score"]), 4) if "metric_score" in result else None,
+            confidence=round(float(result["confidence"]), 4) if "confidence" in result else None,
         )
         for result in results
     ]
