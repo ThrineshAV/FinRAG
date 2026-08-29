@@ -7,24 +7,28 @@ The project currently uses `src/` as its only source directory.
 
 ## Current Status
 
-Stage 1 foundation is partially complete:
+Stage 1 foundation is complete:
 
 - SEC EDGAR 10-K download is available.
 - PDF text extraction with PyMuPDF is available.
 - Page-aware chunk creation is available.
 - Embeddings use `BAAI/bge-small-en-v1.5`.
 - FAISS index and aligned metadata are persisted in `vector_db/`.
-- Metadata-aware retrieval supports company, fiscal year, and filing type.
+- Metadata-aware retrieval supports company, fiscal year, filing type,
+  document type, and quarter.
 - Comparison queries can retrieve multiple supported companies together.
 - FastAPI endpoints are available in `src/api.py`.
 - Grounded OpenAI answer generation is available when `OPENAI_API_KEY` is set.
-- A deterministic retrieval benchmark reports hit rate and MRR.
+- A deterministic retrieval benchmark with 30 cases reports hit rate and MRR.
 - API responses include request IDs and processing-time headers for tracing.
+- A global exception handler returns structured JSON errors for unhandled
+  exceptions.
 - Existing Ollama answer generation remains available in `src/generation/llm.py`.
+- Docker deployment configuration with optional reranking is available.
+- Upload-to-query integration test verifies the full pipeline.
 
-The project is not production-ready yet. OpenAI generation,
-evaluation, authentication, observability, deployment configuration, and
-complete automated test coverage are still planned.
+Streaming answer generation, multi-company comparison workflows,
+authentication, and rate limiting are planned for future stages.
 
 ## Architecture
 

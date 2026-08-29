@@ -369,20 +369,24 @@ python -m src.ingestion.sec_ingestion --company apple
 The project is a functional foundation, not a finished production service.
 The main gaps are:
 
-- Full upload-to-query integration test.
-- Persistent FAISS update behavior for multiple uploads instead of rebuilding
-  the complete local index each time.
-- Complete API filter support for every upload metadata field.
-- Cross-encoder reranking connected to the FAISS retriever.
-- Replacement of the placeholder retrieval response with grounded OpenAI
-  answer generation.
 - Streaming-ready answer generation.
 - Multi-company comparison workflows.
-- Benchmark dataset and retrieval/faithfulness evaluation.
-- Structured logging and exception middleware.
+- Benchmark evaluation cases need verified `relevant_chunk_ids` from the
+  indexed corpus (30 questions are defined in `data/evaluation.json`).
 - Authentication, rate limiting, and request limits.
-- Docker and deployment configuration.
 - Complete unit and integration test coverage.
+
+The following items have been completed since the initial progress log:
+
+- Full upload-to-query integration test (added).
+- Persistent FAISS update behavior (append, not rebuild).
+- Complete API filter support for every upload metadata field
+  (`document_type`, `quarter` wired through).
+- Cross-encoder reranking connected to the FAISS retriever.
+- Grounded OpenAI answer generation.
+- 30-case benchmark dataset defined in `data/evaluation.json`.
+- Structured exception handler added to the API.
+- Docker and deployment configuration.
 
 ## 8. Next Planned Stage
 

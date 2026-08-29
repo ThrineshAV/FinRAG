@@ -10,7 +10,8 @@ from tempfile import NamedTemporaryFile
 from typing import Any
 
 import requests
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile, status
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from src.embeddings.embedder import generate_embeddings, store_embeddings
@@ -45,6 +46,22 @@ async def request_logging_middleware(request, call_next):
     return response
 
 
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Return a structured JSON error for any unhandled exception."""
+    request_id = request.headers.get("X-Request-ID", "unknown")
+    logger.exception(
+        "unhandled_exception request_id=%s path=%s error=%s",
+        request_id,
+        request.url.path,
+        exc,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error", "request_id": request_id},
+    )
+
+
 class QueryRequest(BaseModel):
     """Validated financial question and optional metadata filters."""
 
@@ -52,6 +69,8 @@ class QueryRequest(BaseModel):
     company: str | None = None
     fiscal_year: str | None = None
     filing_type: str | None = None
+    document_type: str | None = None
+    quarter: str | None = None
     top_k: int = Field(default=5, ge=1, le=50)
 
 
@@ -152,8 +171,8 @@ async def query_documents(request: QueryRequest) -> QueryResponse:
                 "company": request.company,
                 "fiscal_year": request.fiscal_year,
                 "filing_type": request.filing_type,
-                "document_type": None,
-                "quarter": None,
+                "document_type": request.document_type,
+                "quarter": request.quarter,
             },
         )
     except (FileNotFoundError, ValueError) as exc:

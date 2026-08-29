@@ -1,10 +1,122 @@
 [
   {
     "question": "What was Apple's net income in fiscal year 2025?",
-    "relevant_chunk_ids": []
+    "relevant_chunk_ids": ["_10-K-Q4-2023-As-Filed-p23-c1", "_10-K-2025-As-Filed-p39-c1"]
   },
   {
     "question": "What was Microsoft's revenue in fiscal year 2026?",
-    "relevant_chunk_ids": []
+    "relevant_chunk_ids": ["323", "255"]
+  },
+  {
+    "question": "What was NVIDIA's gross profit in fiscal year 2026?",
+    "relevant_chunk_ids": ["381", "329"]
+  },
+  {
+    "question": "What was Tesla's operating income in fiscal year 2025?",
+    "relevant_chunk_ids": ["588", "506"]
+  },
+  {
+    "question": "What was Amazon's net income in fiscal year 2025?",
+    "relevant_chunk_ids": ["403", "402"]
+  },
+  {
+    "question": "What was Apple's revenue in fiscal year 2025?",
+    "relevant_chunk_ids": ["_10-K-Q4-2023-As-Filed-p9-c0", "_10-K-Q4-2023-As-Filed-p38-c0"]
+  },
+  {
+    "question": "What was Microsoft's operating expenses in fiscal year 2026?",
+    "relevant_chunk_ids": ["442", "441"]
+  },
+  {
+    "question": "What was NVIDIA's revenue in fiscal year 2026?",
+    "relevant_chunk_ids": ["99", "92"]
+  },
+  {
+    "question": "What was Tesla's gross margin in fiscal year 2025?",
+    "relevant_chunk_ids": ["319", "318"]
+  },
+  {
+    "question": "What was Amazon's revenue in fiscal year 2025?",
+    "relevant_chunk_ids": ["399", "332"]
+  },
+  {
+    "question": "What was Apple's earnings per share in fiscal year 2025?",
+    "relevant_chunk_ids": ["_10-K-Q4-2023-As-Filed-p38-c2", "_10-K-Q4-2023-As-Filed-p38-c1"]
+  },
+  {
+    "question": "What was Microsoft's net income in fiscal year 2026?",
+    "relevant_chunk_ids": ["396", "395"]
+  },
+  {
+    "question": "What was NVIDIA's operating expenses in fiscal year 2026?",
+    "relevant_chunk_ids": ["490", "452"]
+  },
+  {
+    "question": "What was Tesla's revenue in fiscal year 2025?",
+    "relevant_chunk_ids": ["387", "370"]
+  },
+  {
+    "question": "What was Amazon's operating income in fiscal year 2025?",
+    "relevant_chunk_ids": ["403", "402"]
+  },
+  {
+    "question": "What was Apple's gross profit in fiscal year 2025?",
+    "relevant_chunk_ids": ["_10-K-Q4-2023-As-Filed-p9-c6", "_10-K-Q4-2023-As-Filed-p5-c3"]
+  },
+  {
+    "question": "What was Microsoft's earnings per share in fiscal year 2026?",
+    "relevant_chunk_ids": ["396", "395"]
+  },
+  {
+    "question": "What was NVIDIA's net income in fiscal year 2026?",
+    "relevant_chunk_ids": ["436", "407"]
+  },
+  {
+    "question": "What was Tesla's earnings per share in fiscal year 2025?",
+    "relevant_chunk_ids": ["370"]
+  },
+  {
+    "question": "What was Amazon's gross profit in fiscal year 2025?",
+    "relevant_chunk_ids": ["220"]
+  },
+  {
+    "question": "What was Apple's income before tax in fiscal year 2025?",
+    "relevant_chunk_ids": ["_10-K-Q4-2023-As-Filed-p43-c1", "_10-K-Q4-2023-As-Filed-p31-c1"]
+  },
+  {
+    "question": "What was Microsoft's cash flow from operations in fiscal year 2026?",
+    "relevant_chunk_ids": ["474", "473"]
+  },
+  {
+    "question": "What was NVIDIA's gross margin in fiscal year 2026?",
+    "relevant_chunk_ids": ["330", "329"]
+  },
+  {
+    "question": "What was Tesla's net income in fiscal year 2025?",
+    "relevant_chunk_ids": ["529", "436"]
+  },
+  {
+    "question": "What was Amazon's earnings per share in fiscal year 2025?",
+    "relevant_chunk_ids": ["273", "272"]
+  },
+  {
+    "question": "Compare Apple's and Microsoft's revenue in fiscal year 2025.",
+    "relevant_chunk_ids": ["_10-K-Q4-2023-As-Filed-p9-c0", "323", "255"]
+  },
+  {
+    "question": "Compare NVIDIA's and Tesla's net income in fiscal year 2025.",
+    "relevant_chunk_ids": ["436", "407", "529"]
+  },
+  {
+    "question": "Compare Amazon's and Apple's gross profit in fiscal year 2025.",
+    "relevant_chunk_ids": ["220", "_10-K-Q4-2023-As-Filed-p9-c6"]
+  },
+  {
+    "question": "What was Apple's operating expenses in fiscal year 2025?",
+    "relevant_chunk_ids": ["_10-K-Q4-2023-As-Filed-p31-c0", "_10-K-Q4-2023-As-Filed-p26-c2"]
+  },
+  {
+    "question": "What was NVIDIA's earnings per share in fiscal year 2026?",
+    "relevant_chunk_ids": ["385", "478"]
   }
 ]

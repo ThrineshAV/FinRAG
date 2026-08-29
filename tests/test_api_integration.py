@@ -1,6 +1,12 @@
+from pathlib import Path
+from unittest.mock import patch
+
+import fitz
+import numpy as np
 from fastapi.testclient import TestClient
 
 from src import api
+from src.embeddings import embedder
 
 
 client = TestClient(api.app)
@@ -78,3 +84,75 @@ def test_upload_rejects_non_pdf() -> None:
 
     assert response.status_code == 400
     assert response.json() == {"detail": "Only PDF files are supported"}
+
+
+def _create_test_pdf(path: Path, text: str) -> None:
+    """Create a single-page PDF with the given text."""
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), text)
+    doc.save(path)
+    doc.close()
+
+
+class FakeEmbeddingModel:
+    """Return fixed-dimension normalized vectors without downloading a model."""
+
+    def encode(self, texts, **kwargs):
+        rng = np.random.RandomState(42)
+        vectors = rng.randn(len(texts), 384).astype("float32")
+        norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+        return vectors / norms
+
+
+def test_upload_then_query_returns_uploaded_content(tmp_path, monkeypatch) -> None:
+    """End-to-end: upload a PDF, then query and find its content."""
+    # Isolate FAISS storage to tmp_path
+    monkeypatch.setattr(embedder, "VECTOR_DB_DIR", tmp_path)
+    monkeypatch.setattr(embedder, "INDEX_PATH", tmp_path / "index.faiss")
+    monkeypatch.setattr(embedder, "METADATA_PATH", tmp_path / "metadata.json")
+
+    # Use a fake embedding model so tests run without downloading
+    fake_model = FakeEmbeddingModel()
+    monkeypatch.setattr(embedder, "_embedding_model", fake_model)
+
+    # Disable OpenAI so the query returns evidence-only
+    monkeypatch.setattr(api, "is_openai_configured", lambda: False)
+
+    # Disable reranking to avoid downloading the cross-encoder
+    monkeypatch.setenv("ENABLE_RERANKING", "false")
+
+    # Create a test PDF
+    pdf_path = tmp_path / "tesla_report.pdf"
+    _create_test_pdf(pdf_path, "Tesla reported revenue of $96 billion in fiscal year 2025.")
+
+    # Upload
+    with open(pdf_path, "rb") as f:
+        upload_response = client.post(
+            "/upload",
+            files={"file": ("tesla_report.pdf", f, "application/pdf")},
+            data={
+                "company": "Tesla",
+                "document_type": "annual_report",
+                "fiscal_year": "2025",
+                "quarter": "FY",
+            },
+        )
+
+    assert upload_response.status_code == 201
+    assert upload_response.json()["chunks_indexed"] >= 1
+
+    # Query
+    query_response = client.post(
+        "/query",
+        json={
+            "question": "What was Tesla's revenue in 2025?",
+            "company": "Tesla",
+            "fiscal_year": "2025",
+        },
+    )
+
+    assert query_response.status_code == 200
+    body = query_response.json()
+    assert len(body["retrieved_chunks"]) >= 1
+    assert any("Tesla" in chunk or "revenue" in chunk for chunk in body["retrieved_chunks"])

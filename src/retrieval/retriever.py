@@ -17,7 +17,9 @@ TOP_K = 5
 
 def _matches_filter(record: dict[str, Any], key: str, value: Any) -> bool:
     """Match metadata filters without rejecting common company name variants."""
-    record_value = record.get(key)
+    if key not in record:
+        return True
+    record_value = record[key]
     if isinstance(value, list):
         return any(_matches_filter(record, key, item) for item in value)
     if key != "company" or not isinstance(record_value, str) or not isinstance(value, str):
@@ -52,13 +54,14 @@ def retrieve_documents(
     candidate_count = min(max(top_k * 10, top_k), index.ntotal)
     scores, indices = index.search(np.asarray(query_vector, dtype="float32"), candidate_count)
 
+    explicit = filters or {}
     filters = {
         "ticker": parsed_query.get("tickers") or parsed_query.get("ticker"),
         "fiscal_year": parsed_query.get("fiscal_year"),
         "filing_type": parsed_query.get("filing_type"),
-        "document_type": None,
-        "quarter": None,
-        **(filters or {}),
+        "document_type": explicit.get("document_type"),
+        "quarter": explicit.get("quarter"),
+        **{k: v for k, v in explicit.items() if k not in ("document_type", "quarter")},
     }
     results: list[dict[str, Any]] = []
     for score, index_position in zip(scores[0], indices[0]):
