@@ -7,28 +7,27 @@ The project currently uses `src/` as its only source directory.
 
 ## Current Status
 
-Stage 1 foundation is complete:
+Stages 1–4 are complete:
 
-- SEC EDGAR 10-K download is available.
-- PDF text extraction with PyMuPDF is available.
-- Page-aware chunk creation is available.
-- Embeddings use `BAAI/bge-small-en-v1.5`.
-- FAISS index and aligned metadata are persisted in `vector_db/`.
+- SEC EDGAR 10-K download with automatic retry logic
+- PDF text extraction with PyMuPDF
+- Page-aware chunk creation
+- Embeddings use `BAAI/bge-small-en-v1.5`
+- FAISS index and aligned metadata persisted in `vector_db/`
 - Metadata-aware retrieval supports company, fiscal year, filing type,
-  document type, and quarter.
-- Comparison queries can retrieve multiple supported companies together.
-- FastAPI endpoints are available in `src/api.py`.
-- Grounded OpenAI answer generation is available when `OPENAI_API_KEY` is set.
-- A deterministic retrieval benchmark with 30 cases reports hit rate and MRR.
-- API responses include request IDs and processing-time headers for tracing.
-- A global exception handler returns structured JSON errors for unhandled
-  exceptions.
-- Existing Ollama answer generation remains available in `src/generation/llm.py`.
-- Docker deployment configuration with optional reranking is available.
-- Upload-to-query integration test verifies the full pipeline.
+  document type, and quarter
+- Comparison queries can retrieve multiple supported companies together
+- Cross-encoder reranking with financial metric boosting
+- FastAPI endpoints with rate limiting and upload size validation
+- Grounded OpenAI answer generation (streaming and non-streaming)
+- Answer quality evaluation (faithfulness and relevance metrics)
+- Comparison-aware generation prompts for multi-company queries
+- A deterministic retrieval benchmark with 30 verified cases
+- API responses include request IDs and processing-time headers
+- Robust error handling for SEC ingestion and HTML parsing
+- Docker deployment configuration with configurable limits
 
-Streaming answer generation, multi-company comparison workflows,
-authentication, and rate limiting are planned for future stages.
+Authentication and advanced security features are planned for future stages.
 
 ## Architecture
 
@@ -95,6 +94,30 @@ The embedding model is downloaded automatically on first use. Ollama is
 required only when using the local CLI answer-generation path. Set
 `OPENAI_API_KEY` to enable grounded answers from the `/query` endpoint; without
 it, the endpoint returns retrieved evidence as before.
+
+## Configuration
+
+The API supports the following environment variables:
+
+### Rate Limiting
+- `RATE_LIMIT_QUERY` — Rate limit for `/query` and `/query/stream` endpoints (default: `20/minute`)
+- `RATE_LIMIT_UPLOAD` — Rate limit for `/upload` endpoint (default: `5/minute`)
+
+### Upload Limits
+- `MAX_UPLOAD_SIZE_MB` — Maximum PDF upload size in megabytes (default: `25`)
+
+### Retry Behavior
+SEC ingestion automatically retries failed requests up to 3 times with exponential backoff (2–10 seconds between attempts). This applies to both filing metadata requests and document downloads.
+
+### OpenAI Generation
+- `OPENAI_API_KEY` — API key for grounded answer generation
+- `OPENAI_MODEL` — Model to use (default: `gpt-4o-mini`)
+- `OPENAI_TEMPERATURE` — Temperature for generation (default: `0.1`)
+- `OPENAI_MAX_TOKENS` — Maximum tokens for generation (optional)
+
+### Reranking
+- `ENABLE_RERANKING` — Enable cross-encoder reranking (default: `true` locally, `false` in Docker)
+- `RERANKER_MODEL` — Cross-encoder model name (default: `BAAI/bge-reranker-base`)
 
 ## Build The FAISS Index
 

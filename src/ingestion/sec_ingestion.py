@@ -1,9 +1,13 @@
 import json
+import logging
 from pathlib import Path
 import argparse
 import requests
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 import fitz
+
+logger = logging.getLogger(__name__)
 
 
 # ============================================================
@@ -77,6 +81,14 @@ COMPANIES = {
 # Get SEC filing information
 # ============================================================
 
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=2, min=2, max=10),
+    retry=retry_if_exception_type(requests.exceptions.RequestException),
+    before_sleep=lambda retry_state: logger.warning(
+        "SEC filing request failed, retrying (attempt %d/3)...", retry_state.attempt_number
+    ),
+)
 def get_company_filings(cik: str) -> dict:
     """
     Retrieve company filing metadata from SEC EDGAR.
@@ -197,6 +209,14 @@ def save_metadata(
 # Download filing
 # ============================================================
 
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=2, min=2, max=10),
+    retry=retry_if_exception_type(requests.exceptions.RequestException),
+    before_sleep=lambda retry_state: logger.warning(
+        "SEC filing download failed, retrying (attempt %d/3)...", retry_state.attempt_number
+    ),
+)
 def download_filing(
     company_key: str,
     company_info: dict

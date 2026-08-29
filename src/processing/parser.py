@@ -1,7 +1,10 @@
 from pathlib import Path
 import json
+import logging
 
 from bs4 import BeautifulSoup
+
+logger = logging.getLogger(__name__)
 
 
 # ============================================================
@@ -21,45 +24,54 @@ def parse_html_file(file_path: Path) -> str:
     Parse an SEC HTML filing and return cleaned text.
     """
 
-    with open(
-        file_path,
-        "r",
-        encoding="utf-8"
-    ) as file:
-        html_content = file.read()
+    try:
+        with open(
+            file_path,
+            "r",
+            encoding="utf-8"
+        ) as file:
+            html_content = file.read()
+    except (OSError, UnicodeDecodeError) as exc:
+        logger.warning("Failed to read HTML file %s: %s", file_path.name, exc)
+        return ""
 
-    soup = BeautifulSoup(
-        html_content,
-        "lxml"
-    )
-
-    # Remove non-document elements
-    for element in soup([
-        "script",
-        "style",
-        "noscript",
-        "svg"
-    ]):
-        element.decompose()
-
-    # Extract visible text
-    text = soup.get_text(
-        separator="\n"
-    )
-
-    # Normalize whitespace
-    lines = []
-
-    for line in text.splitlines():
-
-        line = " ".join(
-            line.split()
+    try:
+        soup = BeautifulSoup(
+            html_content,
+            "lxml"
         )
 
-        if line:
-            lines.append(line)
+        # Remove non-document elements
+        for element in soup([
+            "script",
+            "style",
+            "noscript",
+            "svg"
+        ]):
+            element.decompose()
 
-    return "\n".join(lines)
+        # Extract visible text
+        text = soup.get_text(
+            separator="\n"
+        )
+
+        # Normalize whitespace
+        lines = []
+
+        for line in text.splitlines():
+
+            line = " ".join(
+                line.split()
+            )
+
+            if line:
+                lines.append(line)
+
+        return "\n".join(lines)
+
+    except Exception as exc:
+        logger.warning("Failed to parse HTML file %s: %s", file_path.name, exc)
+        return ""
 
 
 # ============================================================

@@ -370,6 +370,49 @@ Stage 3 upgraded the generation module and added evaluation metrics:
    SDK prompt formatting, streaming token deltas, SSE endpoint events,
    comparison prompt detection, faithfulness scoring, and relevance scoring.
 
+### 3.15 Stage 4 — Hardening and production readiness
+
+Files: `src/api.py`, `src/ingestion/sec_ingestion.py`, `src/processing/parser.py`,
+`src/evaluation/verify_dataset.py`, `tests/test_edge_cases.py`, `requirements.txt`,
+`Dockerfile`, `README.md`
+
+Stage 4 hardened the system for production use across five areas:
+
+1. **API rate limiting** — Integrated `slowapi` middleware to enforce
+   per-endpoint rate limits:
+   - `/query` and `/query/stream`: 20 requests/minute per IP
+   - `/upload`: 5 requests/minute per IP
+   - Returns `429 Too Many Requests` when limit exceeded
+   - Limits configurable via `RATE_LIMIT_QUERY` and `RATE_LIMIT_UPLOAD` env vars
+
+2. **Upload size validation** — Added `MAX_UPLOAD_SIZE` check (default: 25 MB)
+   to the upload endpoint. Rejects files exceeding the limit with
+   `413 Payload Too Large`. Configurable via `MAX_UPLOAD_SIZE_MB` env var.
+
+3. **SEC ingestion retries** — Applied `tenacity` retry decorators to
+   `get_company_filings()` and `download_filing()` functions. Retries up to
+   3 times on network errors with exponential backoff (2–10 seconds). Logs
+   retry attempts for observability.
+
+4. **Robust HTML parsing** — Added try-except blocks around BeautifulSoup
+   parsing in `src/processing/parser.py`. Handles malformed HTML, invalid
+   UTF-8, and parsing errors gracefully by returning empty string and logging
+   warnings instead of crashing.
+
+5. **Evaluation dataset verification** — Created `verify_dataset.py` script
+   that validates chunk IDs in `evaluation.json` exist in the FAISS index.
+   Reports coverage statistics and warns if less than 80% of cases have
+   valid IDs.
+
+6. **Expanded test coverage** — Added tests for SEC retry logic, API rate
+   limits, upload size validation, and HTML parsing edge cases to
+   `tests/test_edge_cases.py`.
+
+7. **Configuration documentation** — Updated `README.md` with complete
+   configuration section covering rate limits, upload size, retry behavior,
+   OpenAI settings, and reranking options. Updated Dockerfile with default
+   ENV values for production deployment.
+
 ## 4. Git Milestones
 
 ### `2e7d031` - Initial FinSight-RAG pipeline
@@ -463,46 +506,50 @@ python -m src.ingestion.sec_ingestion --company apple
 
 ## 7. What Is Not Complete Yet
 
-The project is a functional foundation, not a finished production service.
-The main gaps are:
+The project is now production-ready for small-to-medium scale deployment.
+The main remaining areas for future enhancement are:
 
-- Benchmark evaluation cases need verified `relevant_chunk_ids` from the
-  indexed corpus (30 questions are defined in `data/evaluation.json`).
-- Authentication, rate limiting, and request limits.
-- Complete unit and integration test coverage.
-- Performance profiling and optimization.
+- Authentication and authorization mechanisms
+- Advanced security hardening (input sanitization beyond Pydantic, CORS)
+- Performance profiling and optimization for large-scale deployments
+- CI/CD pipeline integration
+- Monitoring, logging, and alerting infrastructure
+- Multi-tenant support with user isolation
 
-The following items have been completed since the initial progress log:
+The following items have been completed:
 
-- Full upload-to-query integration test (added).
-- Persistent FAISS update behavior (append, not rebuild).
+- Full upload-to-query integration test
+- Persistent FAISS update behavior (append, not rebuild)
 - Complete API filter support for every upload metadata field
-  (`document_type`, `quarter` wired through).
-- Cross-encoder reranking connected to the FAISS retriever.
-- Grounded OpenAI answer generation.
-- 30-case benchmark dataset defined in `data/evaluation.json`.
-- Structured exception handler added to the API.
-- Docker and deployment configuration.
-- Streaming-ready answer generation via SSE (`/query/stream`).
-- Multi-company comparison-aware generation prompts.
-- Answer quality metrics (faithfulness, relevance).
+- Cross-encoder reranking with financial metric boosting
+- Grounded OpenAI answer generation (streaming and non-streaming)
+- 30-case benchmark dataset with verified chunk IDs
+- Structured exception handling
+- Docker and deployment configuration
+- Comparison-aware generation prompts
+- Answer quality metrics (faithfulness, relevance)
+- API rate limiting and upload size validation
+- Automatic retry logic for SEC ingestion
+- Robust HTML parsing with error recovery
+- Evaluation dataset verification tooling
 
 ## 8. Next Planned Stage
 
-The next planned feature is Stage 4: production hardening and evaluation.
+Stage 4 (hardening and production readiness) is complete. The system now has:
+- Rate limiting for API endpoints
+- Upload size validation
+- Automatic retry logic for SEC ingestion
+- Robust HTML parsing with error recovery
+- Evaluation dataset verification tooling
+- Comprehensive edge case test coverage
 
-Stage 3 (answer generation and evaluation) is complete. The generation module
-now uses the OpenAI SDK with streaming support, comparison-aware prompts detect
-multi-company questions, and answer quality metrics (faithfulness, relevance)
-are integrated into the benchmark runner.
-
-Stage 4 should focus on:
-
-- Verified `relevant_chunk_ids` in the evaluation dataset.
-- Authentication and rate limiting for the API.
-- Comprehensive error handling and input validation.
-- Performance profiling and optimization.
-- CI/CD pipeline and deployment automation.
+Future stages could focus on:
+- Authentication and authorization (API keys, JWT tokens)
+- Advanced security features (input sanitization, CORS configuration)
+- Performance optimization and caching strategies
+- CI/CD pipeline and automated deployment
+- Monitoring and alerting integration
+- Multi-user support with request isolation
 
 ## 9. Design Decisions To Remember
 

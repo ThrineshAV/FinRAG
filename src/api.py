@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json as _json
 import logging
+import os
 import time
 from uuid import uuid4
 from pathlib import Path
@@ -15,6 +16,9 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, sta
 from fastapi.responses import JSONResponse, StreamingResponse
 from openai import OpenAIError
 from pydantic import BaseModel, Field
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 from src.embeddings.embedder import generate_embeddings, store_embeddings
 from src.embeddings.embedder import load_vector_store
@@ -29,7 +33,16 @@ from src.retrieval.retriever import retrieve_documents
 
 logger = logging.getLogger(__name__)
 
+# Rate limiting configuration
+limiter = Limiter(key_func=get_remote_address)
 app = FastAPI(title="FinSight-RAG", version="1.0.0")
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Configuration
+RATE_LIMIT_QUERY = os.getenv("RATE_LIMIT_QUERY", "20/minute")
+RATE_LIMIT_UPLOAD = os.getenv("RATE_LIMIT_UPLOAD", "5/minute")
+MAX_UPLOAD_SIZE = int(os.getenv("MAX_UPLOAD_SIZE_MB", "25")) * 1024 * 1024  # Convert MB to bytes
 
 
 @app.middleware("http")
@@ -128,7 +141,9 @@ async def readiness() -> dict[str, str]:
 
 
 @app.post("/upload", response_model=UploadResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit(RATE_LIMIT_UPLOAD)
 async def upload_pdf(
+    request: Request,
     file: UploadFile = File(...),
     company: str = Form(...),
     document_type: str = Form(...),
@@ -138,6 +153,15 @@ async def upload_pdf(
     """Extract, chunk, embed, and index an uploaded financial PDF."""
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported")
+
+    # Check file size via Content-Length header
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > MAX_UPLOAD_SIZE:
+        max_mb = MAX_UPLOAD_SIZE / (1024 * 1024)
+        raise HTTPException(
+            status_code=413,
+            detail=f"File size exceeds maximum allowed size of {max_mb:.0f} MB"
+        )
 
     temporary_path: Path | None = None
     metadata = {
@@ -171,18 +195,19 @@ async def upload_pdf(
 
 
 @app.post("/query", response_model=QueryResponse)
-async def query_documents(request: QueryRequest) -> QueryResponse:
+@limiter.limit(RATE_LIMIT_QUERY)
+async def query_documents(request: Request, query_request: QueryRequest) -> QueryResponse:
     """Retrieve relevant chunks with metadata and page citations."""
     try:
         results, _ = retrieve_documents(
-            request.question,
-            top_k=request.top_k,
+            query_request.question,
+            top_k=query_request.top_k,
             filters={
-                "company": request.company,
-                "fiscal_year": request.fiscal_year,
-                "filing_type": request.filing_type,
-                "document_type": request.document_type,
-                "quarter": request.quarter,
+                "company": query_request.company,
+                "fiscal_year": query_request.fiscal_year,
+                "filing_type": query_request.filing_type,
+                "document_type": query_request.document_type,
+                "quarter": query_request.quarter,
             },
         )
     except (FileNotFoundError, ValueError) as exc:
@@ -198,7 +223,7 @@ async def query_documents(request: QueryRequest) -> QueryResponse:
                 for result in results
             )
             try:
-                answer = generate_openai_answer(request.question, context)
+                answer = generate_openai_answer(query_request.question, context)
             except (ValueError, OpenAIError, KeyError, IndexError) as exc:
                 logger.error("Grounded answer generation failed: %s", exc)
                 raise HTTPException(status_code=502, detail="Answer generation failed") from exc
@@ -244,7 +269,8 @@ def _build_context(results: list[dict[str, Any]]) -> str:
 
 
 @app.post("/query/stream")
-async def query_documents_stream(request: QueryRequest) -> StreamingResponse:
+@limiter.limit(RATE_LIMIT_QUERY)
+async def query_documents_stream(request: Request, query_request: QueryRequest) -> StreamingResponse:
     """Stream an answer as Server-Sent Events (SSE).
 
     Retrieval + reranking happen synchronously before the stream starts.
@@ -262,14 +288,14 @@ async def query_documents_stream(request: QueryRequest) -> StreamingResponse:
 
     try:
         results, _ = retrieve_documents(
-            request.question,
-            top_k=request.top_k,
+            query_request.question,
+            top_k=query_request.top_k,
             filters={
-                "company": request.company,
-                "fiscal_year": request.fiscal_year,
-                "filing_type": request.filing_type,
-                "document_type": request.document_type,
-                "quarter": request.quarter,
+                "company": query_request.company,
+                "fiscal_year": query_request.fiscal_year,
+                "filing_type": query_request.filing_type,
+                "document_type": query_request.document_type,
+                "quarter": query_request.quarter,
             },
         )
     except (FileNotFoundError, ValueError) as exc:
@@ -283,7 +309,7 @@ async def query_documents_stream(request: QueryRequest) -> StreamingResponse:
 
     def event_generator():
         try:
-            for token in generate_openai_answer_stream(request.question, context):
+            for token in generate_openai_answer_stream(query_request.question, context):
                 yield f"data: {_json.dumps({'token': token})}\n\n"
         except (ValueError, OpenAIError) as exc:
             logger.error("Streaming generation failed: %s", exc)
