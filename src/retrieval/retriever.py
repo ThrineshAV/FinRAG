@@ -15,6 +15,8 @@ from src.retrieval.reranker import rerank_documents
 
 TOP_K = 5
 
+EMBEDDING_CACHE_TTL = int(os.getenv("EMBEDDING_CACHE_TTL", "3600"))
+
 
 def _matches_filter(record: dict[str, Any], key: str, value: Any) -> bool:
     """Match metadata filters without rejecting common company name variants."""
