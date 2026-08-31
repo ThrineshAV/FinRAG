@@ -1,0 +1,103 @@
+name: Deploy
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'production' }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure deployment
+      run: |
+        echo "### Deployment Configuration :rocket:" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Environment:** ${{ github.event.inputs.environment || 'production' }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Version:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Triggered by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "---" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Deployment Steps" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "This workflow provides a template for cloud deployment." >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Configure deployment by:**" >> $GITHUB_STEP_SUMMARY
+        echo "1. Set up GitHub Environments (staging, production)" >> $GITHUB_STEP_SUMMARY
+        echo "2. Add cloud provider secrets (AWS_*, GCP_*, AZURE_*)" >> $GITHUB_STEP_SUMMARY
+        echo "3. Uncomment and configure your deployment method below" >> $GITHUB_STEP_SUMMARY
+
+    # Uncomment and configure for AWS ECS deployment
+    # - name: Configure AWS credentials
+    #   uses: aws-actions/configure-aws-credentials@v4
+    #   with:
+    #     aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+    #     aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+    #     aws-region: us-east-1
+    #
+    # - name: Deploy to AWS ECS
+    #   run: |
+    #     aws ecs update-service --cluster finsight-cluster \
+    #       --service finsight-rag --force-new-deployment
+
+    # Uncomment and configure for Google Cloud Run deployment
+    # - name: Authenticate to Google Cloud
+    #   uses: google-github-actions/auth@v2
+    #   with:
+    #     credentials_json: ${{ secrets.GCP_SA_KEY }}
+    #
+    # - name: Deploy to Cloud Run
+    #   run: |
+    #     gcloud run deploy finsight-rag \
+    #       --image ghcr.io/${{ github.repository }}:${{ github.ref_name }} \
+    #       --region us-central1 \
+    #       --platform managed
+
+    # Uncomment and configure for Azure Container Instances
+    # - name: Azure Login
+    #   uses: azure/login@v2
+    #   with:
+    #     creds: ${{ secrets.AZURE_CREDENTIALS }}
+    #
+    # - name: Deploy to Azure
+    #   run: |
+    #     az container create --resource-group finsight-rg \
+    #       --name finsight-rag \
+    #       --image ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+
+    # Uncomment for simple VPS/server deployment via SSH
+    # - name: Deploy to server via SSH
+    #   uses: appleboy/ssh-action@v1.0.3
+    #   with:
+    #     host: ${{ secrets.DEPLOY_HOST }}
+    #     username: ${{ secrets.DEPLOY_USER }}
+    #     key: ${{ secrets.DEPLOY_SSH_KEY }}
+    #     script: |
+    #       cd /opt/finsight-rag
+    #       docker-compose pull
+    #       docker-compose up -d
+
+    - name: Deployment complete
+      run: |
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "---" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "✅ Deployment workflow completed" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "_Configure actual deployment steps by uncommenting and editing this workflow file._" >> $GITHUB_STEP_SUMMARY

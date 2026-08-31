@@ -2,12 +2,16 @@
 # FinSight-RAG
 ============================================================
 
+[![Test](https://github.com/ThrineshAV/financial-rag/actions/workflows/test.yml/badge.svg)](https://github.com/ThrineshAV/financial-rag/actions/workflows/test.yml)
+[![Docker](https://github.com/ThrineshAV/financial-rag/actions/workflows/docker.yml/badge.svg)](https://github.com/ThrineshAV/financial-rag/actions/workflows/docker.yml)
+[![Security](https://github.com/ThrineshAV/financial-rag/actions/workflows/security.yml/badge.svg)](https://github.com/ThrineshAV/financial-rag/actions/workflows/security.yml)
+
 Financial document Retrieval-Augmented Generation (RAG) project.
 The project currently uses `src/` as its only source directory.
 
 ## Current Status
 
-Stages 1–5 are complete:
+Stages 1–6 are complete:
 
 - SEC EDGAR 10-K download with automatic retry logic
 - PDF text extraction with PyMuPDF
@@ -29,8 +33,12 @@ Stages 1–5 are complete:
 - API key authentication via `X-API-Key` header
 - Role-based access control (reader, admin)
 - Admin endpoints for API key management
+- GitHub Actions CI/CD pipeline with automated testing
+- Docker image building and publishing to GitHub Container Registry
+- Security scanning with Trivy and Bandit
+- Test coverage reporting with pytest-cov
 
-Advanced security features and multi-tenant support are planned for future stages.
+Advanced performance optimization and multi-tenant support are planned for future stages.
 
 ## Architecture
 
@@ -279,6 +287,40 @@ python -m src.evaluation.benchmark
 
 Replace the starter cases' `relevant_chunk_ids` with verified IDs from the
 indexed corpus before using the reported scores for comparison.
+
+## CI/CD Pipeline
+
+The project uses GitHub Actions for continuous integration and deployment:
+
+### Automated Workflows
+
+- **Test** — Runs on every push and PR. Executes all 83 tests with coverage reporting.
+- **Docker** — Builds and pushes Docker images to GitHub Container Registry on tags and main branch.
+- **Security** — Scans dependencies and Docker images for vulnerabilities using Trivy and Bandit.
+- **Deploy** — Template workflow for cloud deployment (AWS/GCP/Azure).
+
+### Running Tests Locally
+
+```powershell
+$env:PYTHONPATH="."
+pytest --cov=src --cov-report=term-missing
+```
+
+### Building Docker Images
+
+```powershell
+docker build -t finsight-rag:local .
+```
+
+### Deployment
+
+The deploy workflow provides templates for:
+- AWS ECS
+- Google Cloud Run
+- Azure Container Instances
+- SSH-based VPS deployment
+
+Configure GitHub Environments and secrets in your repository settings before deploying.
 
 ## Run With Docker
 

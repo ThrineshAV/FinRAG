@@ -587,23 +587,73 @@ Stage 5 added API key authentication and role-based authorization across six are
    - Updated README with authentication setup and usage
    - Updated Dockerfile with `AUTH_REQUIRED=true` default
 
+### 3.17 Stage 6 — CI/CD Pipeline and Automated Deployment
+
+Files: `.github/workflows/test.yml`, `.github/workflows/docker.yml`,
+`.github/workflows/security.yml`, `.github/workflows/deploy.yml`,
+`pyproject.toml`, `README.md`
+
+Stage 6 added continuous integration and deployment automation across five areas:
+
+1. **Automated testing workflow** — Created `.github/workflows/test.yml` that:
+   - Runs on every push and pull request to main/develop branches
+   - Executes all 83 tests with pytest
+   - Generates coverage reports with pytest-cov
+   - Uploads coverage to Codecov
+   - Uses Python 3.12 with pip caching for faster builds
+   - Disables auth and reranking for CI environment
+
+2. **Docker build and push workflow** — Created `.github/workflows/docker.yml` that:
+   - Builds Docker images on main branch pushes and version tags
+   - Pushes images to GitHub Container Registry (ghcr.io)
+   - Generates semantic version tags (v1.0.0, v1.0, v1)
+   - Uses Docker Buildx with layer caching
+   - Only builds (no push) for pull requests
+
+3. **Security scanning workflow** — Created `.github/workflows/security.yml` that:
+   - Scans dependencies with Trivy vulnerability scanner
+   - Scans Docker images for security issues
+   - Runs Safety check on Python dependencies
+   - Runs Bandit for Python code security analysis
+   - Uploads SARIF results to GitHub Security tab
+   - Runs weekly on schedule (Sundays at 00:00 UTC)
+
+4. **Deployment workflow template** — Created `.github/workflows/deploy.yml` with:
+   - Manual deployment trigger via workflow_dispatch
+   - Automatic deployment on version tags
+   - Templates for AWS ECS, Google Cloud Run, Azure Container Instances
+   - SSH-based VPS deployment option
+   - Environment-based configuration (staging, production)
+
+5. **Test coverage configuration** — Created `pyproject.toml` with:
+   - pytest configuration for test discovery
+   - Coverage settings with source tracking
+   - Exclusion patterns for test files and virtual environments
+   - Coverage reporting with missing line indicators
+
+6. **Documentation and badges** — Updated README with:
+   - GitHub Actions status badges for test, docker, and security workflows
+   - CI/CD section explaining automated workflows
+   - Local testing and Docker build instructions
+   - Deployment configuration guide
+
 ## 8. Next Planned Stage
 
-Stage 5 (authentication and authorization) is complete. The system now has:
-- API key authentication via `X-API-Key` header
-- Role-based access control (reader, admin)
-- File-based API key storage with SHA-256 hashing
-- Admin endpoints for key management
-- Configurable authentication (enabled by default)
-- 24 comprehensive auth tests
+Stage 6 (CI/CD pipeline) is complete. The system now has:
+- Automated testing on every push and PR
+- Docker image building and publishing to GitHub Container Registry
+- Security scanning for dependencies and Docker images
+- Deployment workflow templates for major cloud providers
+- Test coverage reporting and configuration
+- CI/CD status badges in README
 
 Future stages could focus on:
 - Advanced security features (CORS configuration, input sanitization beyond Pydantic, CSP headers)
 - Performance optimization and caching strategies (Redis for vector cache, query result caching)
-- CI/CD pipeline and automated deployment (GitHub Actions, deployment automation)
 - Monitoring and alerting integration (Prometheus metrics, structured logging, APM)
 - Multi-user support with request isolation (per-user rate limits, usage tracking)
 - Additional authentication methods (JWT tokens, OAuth2, SSO integration)
+- Enhanced RAG features (multi-modal support, hybrid search, conversational context)
 
 ## 9. Design Decisions To Remember
 
