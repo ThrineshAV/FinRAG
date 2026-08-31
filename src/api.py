@@ -434,7 +434,8 @@ async def query_documents_stream(
         response.headers["X-Cache"] = "HIT"
         return StreamingResponse(
             iter([f"data: {_json.dumps({'cached': True, 'answer': cached_response.answer, 'citations': [c.model_dump() for c in cached_response.citations]})}\n\n"]),
-            media_type="text/event-stream"
+            media_type="text/event-stream",
+            headers={"X-Cache": "HIT"}
         )
 
     response.headers["X-Cache"] = "MISS"
@@ -478,7 +479,7 @@ async def query_documents_stream(
 
         yield f"data: {_json.dumps({'done': True, 'citations': [c.model_dump() for c in citations]})}\n\n"
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(event_generator(), media_type="text/event-stream", headers={"X-Cache": "MISS"})
 
 
 # ---------------------------------------------------------------------------
