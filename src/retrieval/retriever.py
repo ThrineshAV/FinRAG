@@ -7,6 +7,7 @@ from typing import Any
 
 import numpy as np
 
+from src.cache.manager import build_cache_key, get_cache_manager
 from src.embeddings.embedder import get_embedding_model, load_vector_store
 from src.retrieval.query_parser import parse_query
 from src.retrieval.reranker import rerank_documents
@@ -34,7 +35,6 @@ def _matches_filter(record: dict[str, Any], key: str, value: Any) -> bool:
         normalized_value = normalized_value.removesuffix(suffix).strip()
     return normalized_record == normalized_value
 
-
 def retrieve_documents(
     query: str,
     top_k: int = TOP_K,
@@ -49,13 +49,28 @@ def retrieve_documents(
 
     parsed_query = parse_query(query)
     index, metadata = load_vector_store()
-    query_vector = get_embedding_model().encode(
-        [query], normalize_embeddings=True, convert_to_numpy=True
-    )
+
+    # Cache lookup for query embedding
+    cache_manager = get_cache_manager()
+    cache_key = build_cache_key("embedding", {"query": query})
+    query_vector = cache_manager.get(cache_key)
+
+    if query_vector is None:
+        query_vector = get_embedding_model().encode(
+            [query], normalize_embeddings=True, convert_to_numpy=True
+        )
+        cache_manager.set(cache_key, query_vector.tolist(), ttl=EMBEDDING_CACHE_TTL)
+    else:
+        query_vector = np.array(query_vector, dtype="float32")
+
     if candidate_count is None:
         candidate_count = top_k * 4
     candidate_count = min(max(candidate_count, top_k), index.ntotal)
-    scores, indices = index.search(np.asarray(query_vector, dtype="float32"), candidate_count)
+
+    # Ensure query_vector is the right shape for FAISS
+    query_vector_search = query_vector.reshape(1, -1)
+
+    scores, indices = index.search(np.asarray(query_vector_search, dtype="float32"), candidate_count)
 
     explicit = filters or {}
     filters = {

@@ -137,6 +137,20 @@ SEC ingestion automatically retries failed requests up to 3 times with exponenti
 - `ENABLE_RERANKING` — Enable cross-encoder reranking (default: `true` locally, `false` in Docker)
 - `RERANKER_MODEL` — Cross-encoder model name (default: `BAAI/bge-reranker-base`)
 
+### Caching
+- `CACHE_ENABLED` — Enable caching system (default: `true`)
+- `CACHE_TTL_SECONDS` — Time-to-live for cached items in seconds (default: `3600`)
+- `REDIS_URL` — Redis connection URL (default: `redis://localhost:6379/0`)
+- `CACHE_EMBEDDING_TTL_SECONDS` — TTL for query embedding cache (default: `3600`)
+
+The caching system uses Redis when available and falls back to an in-memory cache when Redis is not accessible. This allows the application to run in development environments without external dependencies while providing performance benefits in production with Redis.
+
+Two levels of caching are implemented:
+1. **Query Result Caching**: Complete responses from `/query` and `/query/stream` endpoints are cached based on the question, filters, and OpenAI configuration. Cache hits return the previous response with an `X-Cache: HIT` header.
+2. **Query Embedding Caching**: Embeddings generated for search queries are cached to avoid recomputation of identical queries. This reduces the computational load on the embedding model.
+
+Cache statistics are tracked internally and can be extended with monitoring endpoints in future versions.
+
 ## Build The FAISS Index
 
 The existing chunk files under `data/chunks/` are used by the embedder.

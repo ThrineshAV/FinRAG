@@ -64,6 +64,7 @@ uvicorn[standard]
 pydantic
 pydantic-settings
 slowapi
+redis
 
 
 # ==============================================================================
