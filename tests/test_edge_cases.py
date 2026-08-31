@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+
+# Disable authentication for edge case tests
+os.environ["AUTH_REQUIRED"] = "false"
 
 from src.processing.chunker import create_chunks, create_page_chunks
 from src.processing.parser import parse_html_file, load_metadata

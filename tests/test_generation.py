@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from unittest.mock import MagicMock
 
 from fastapi.testclient import TestClient
@@ -9,6 +10,9 @@ from fastapi.testclient import TestClient
 from src import api
 from src.evaluation.metrics import evaluate_answer_quality
 from src.generation import llm
+
+# Disable authentication for generation tests
+os.environ["AUTH_REQUIRED"] = "false"
 
 
 # ============================================================

@@ -12,7 +12,7 @@ from tempfile import NamedTemporaryFile
 from typing import Any
 
 import requests
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import JSONResponse, StreamingResponse
 from openai import OpenAIError
 from pydantic import BaseModel, Field
@@ -20,6 +20,9 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
+from src.auth.api_keys import create_api_key, list_api_keys, revoke_api_key
+from src.auth.dependencies import require_admin, require_api_key, require_upload
+from src.auth.models import APIKeyCreate, APIKeyInfo, APIKeyRecord, APIKeyResponse
 from src.embeddings.embedder import generate_embeddings, store_embeddings
 from src.embeddings.embedder import load_vector_store
 from src.ingestion.sec_ingestion import extract_pdf_pages
@@ -149,6 +152,7 @@ async def upload_pdf(
     document_type: str = Form(...),
     fiscal_year: str = Form(...),
     quarter: str = Form(...),
+    _key: APIKeyRecord | None = Depends(require_upload),
 ) -> UploadResponse:
     """Extract, chunk, embed, and index an uploaded financial PDF."""
     if not file.filename or not file.filename.lower().endswith(".pdf"):
@@ -196,7 +200,7 @@ async def upload_pdf(
 
 @app.post("/query", response_model=QueryResponse)
 @limiter.limit(RATE_LIMIT_QUERY)
-async def query_documents(request: Request, query_request: QueryRequest) -> QueryResponse:
+async def query_documents(request: Request, query_request: QueryRequest, _key: APIKeyRecord | None = Depends(require_api_key)) -> QueryResponse:
     """Retrieve relevant chunks with metadata and page citations."""
     try:
         results, _ = retrieve_documents(
@@ -270,7 +274,7 @@ def _build_context(results: list[dict[str, Any]]) -> str:
 
 @app.post("/query/stream")
 @limiter.limit(RATE_LIMIT_QUERY)
-async def query_documents_stream(request: Request, query_request: QueryRequest) -> StreamingResponse:
+async def query_documents_stream(request: Request, query_request: QueryRequest, _key: APIKeyRecord | None = Depends(require_api_key)) -> StreamingResponse:
     """Stream an answer as Server-Sent Events (SSE).
 
     Retrieval + reranking happen synchronously before the stream starts.
@@ -318,3 +322,38 @@ async def query_documents_stream(request: Request, query_request: QueryRequest) 
         yield f"data: {_json.dumps({'done': True, 'citations': [c.model_dump() for c in citations]})}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+# ---------------------------------------------------------------------------
+# Admin Endpoints
+# ---------------------------------------------------------------------------
+
+@app.post("/admin/keys", response_model=APIKeyResponse)
+async def create_key(
+    request: Request,
+    key_request: APIKeyCreate,
+    _admin: APIKeyRecord = Depends(require_admin)
+) -> APIKeyResponse:
+    """Create a new API key. Requires admin privileges."""
+    return create_api_key(key_request)
+
+
+@app.get("/admin/keys", response_model=list[APIKeyInfo])
+async def list_keys(
+    request: Request,
+    _admin: APIKeyRecord = Depends(require_admin)
+) -> list[APIKeyInfo]:
+    """List all API keys. Requires admin privileges."""
+    return list_api_keys()
+
+
+@app.delete("/admin/keys/{key_id}")
+async def delete_key(
+    request: Request,
+    key_id: str,
+    _admin: APIKeyRecord = Depends(require_admin)
+) -> dict[str, str]:
+    """Revoke an API key. Requires admin privileges."""
+    if revoke_api_key(key_id):
+        return {"detail": f"Key {key_id} revoked successfully"}
+    raise HTTPException(status_code=404, detail="API key not found")

@@ -506,15 +506,15 @@ python -m src.ingestion.sec_ingestion --company apple
 
 ## 7. What Is Not Complete Yet
 
-The project is now production-ready for small-to-medium scale deployment.
+The project is now production-ready for small-to-medium scale deployment with authentication.
 The main remaining areas for future enhancement are:
 
-- Authentication and authorization mechanisms
-- Advanced security hardening (input sanitization beyond Pydantic, CORS)
+- Advanced security hardening (CORS, CSP headers, rate limiting per user)
 - Performance profiling and optimization for large-scale deployments
 - CI/CD pipeline integration
 - Monitoring, logging, and alerting infrastructure
-- Multi-tenant support with user isolation
+- Multi-tenant support with user isolation and per-user quotas
+- Additional authentication methods (JWT, OAuth2, SSO)
 
 The following items have been completed:
 
@@ -532,24 +532,78 @@ The following items have been completed:
 - Automatic retry logic for SEC ingestion
 - Robust HTML parsing with error recovery
 - Evaluation dataset verification tooling
+- API key authentication and authorization
+- Role-based access control (reader, admin)
+- Admin endpoints for API key management
+
+### 3.16 Stage 5 — Authentication and authorization
+
+Files: `src/auth/models.py`, `src/auth/api_keys.py`, `src/auth/dependencies.py`,
+`src/api.py`, `tests/test_auth.py`, `requirements.txt`, `Dockerfile`, `README.md`
+
+Stage 5 added API key authentication and role-based authorization across six areas:
+
+1. **API key models** — Created `src/auth/models.py` with Pydantic models for
+   API keys, user roles (`reader`, `admin`), and permission checks. Keys are
+   stored as `APIKeyRecord` with SHA-256 hashed values.
+
+2. **Key management** — Implemented `src/auth/api_keys.py` with file-based
+   JSON storage for API keys. Features:
+   - Key generation with `fsr_` prefix and 32 bytes of randomness
+   - SHA-256 hashing (raw keys never stored)
+   - Validation, revocation, and listing
+   - CLI bootstrap: `python -m src.auth.api_keys`
+   - Configurable storage path via `API_KEYS_FILE` env var
+
+3. **FastAPI dependencies** — Created `src/auth/dependencies.py` with reusable
+   auth dependencies:
+   - `require_api_key` — validates `X-API-Key` header for protected endpoints
+   - `require_admin` — enforces admin role for key management
+   - `require_upload` — checks upload permission (admin only)
+   - Configurable via `AUTH_REQUIRED` env var (default: `true`)
+
+4. **Protected endpoints** — Updated `src/api.py` to wire authentication:
+   - `/upload`, `/query`, `/query/stream` require valid API keys when auth enabled
+   - `/health` and `/ready` remain public (load balancer probes)
+   - Added admin endpoints: `POST /admin/keys`, `GET /admin/keys`, `DELETE /admin/keys/{key_id}`
+   - Admin endpoints always require authentication
+
+5. **Role-based access control** — Two roles with distinct permissions:
+   - `reader` — can query documents
+   - `admin` — can query, upload documents, and manage API keys
+
+6. **Comprehensive testing** — Added `tests/test_auth.py` with 24 tests covering:
+   - Key creation, validation, hashing, and revocation
+   - Role enforcement (reader vs admin permissions)
+   - Protected endpoint access control
+   - Admin endpoint security
+   - Authentication bypass when `AUTH_REQUIRED=false`
+   - Public endpoint accessibility
+
+7. **Configuration and documentation** — Updated configuration docs:
+   - `AUTH_REQUIRED` env var for toggling authentication
+   - `ADMIN_API_KEY` for bootstrap setup
+   - `API_KEYS_FILE` for custom storage path
+   - Updated README with authentication setup and usage
+   - Updated Dockerfile with `AUTH_REQUIRED=true` default
 
 ## 8. Next Planned Stage
 
-Stage 4 (hardening and production readiness) is complete. The system now has:
-- Rate limiting for API endpoints
-- Upload size validation
-- Automatic retry logic for SEC ingestion
-- Robust HTML parsing with error recovery
-- Evaluation dataset verification tooling
-- Comprehensive edge case test coverage
+Stage 5 (authentication and authorization) is complete. The system now has:
+- API key authentication via `X-API-Key` header
+- Role-based access control (reader, admin)
+- File-based API key storage with SHA-256 hashing
+- Admin endpoints for key management
+- Configurable authentication (enabled by default)
+- 24 comprehensive auth tests
 
 Future stages could focus on:
-- Authentication and authorization (API keys, JWT tokens)
-- Advanced security features (input sanitization, CORS configuration)
-- Performance optimization and caching strategies
-- CI/CD pipeline and automated deployment
-- Monitoring and alerting integration
-- Multi-user support with request isolation
+- Advanced security features (CORS configuration, input sanitization beyond Pydantic, CSP headers)
+- Performance optimization and caching strategies (Redis for vector cache, query result caching)
+- CI/CD pipeline and automated deployment (GitHub Actions, deployment automation)
+- Monitoring and alerting integration (Prometheus metrics, structured logging, APM)
+- Multi-user support with request isolation (per-user rate limits, usage tracking)
+- Additional authentication methods (JWT tokens, OAuth2, SSO integration)
 
 ## 9. Design Decisions To Remember
 

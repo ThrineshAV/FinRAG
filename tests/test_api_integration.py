@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -8,6 +9,8 @@ from fastapi.testclient import TestClient
 from src import api
 from src.embeddings import embedder
 
+# Disable authentication for API integration tests
+os.environ["AUTH_REQUIRED"] = "false"
 
 client = TestClient(api.app)
 

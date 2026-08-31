@@ -7,7 +7,7 @@ The project currently uses `src/` as its only source directory.
 
 ## Current Status
 
-Stages 1–4 are complete:
+Stages 1–5 are complete:
 
 - SEC EDGAR 10-K download with automatic retry logic
 - PDF text extraction with PyMuPDF
@@ -26,8 +26,11 @@ Stages 1–4 are complete:
 - API responses include request IDs and processing-time headers
 - Robust error handling for SEC ingestion and HTML parsing
 - Docker deployment configuration with configurable limits
+- API key authentication via `X-API-Key` header
+- Role-based access control (reader, admin)
+- Admin endpoints for API key management
 
-Authentication and advanced security features are planned for future stages.
+Advanced security features and multi-tenant support are planned for future stages.
 
 ## Architecture
 
@@ -99,6 +102,13 @@ it, the endpoint returns retrieved evidence as before.
 
 The API supports the following environment variables:
 
+### Authentication
+- `AUTH_REQUIRED` — Enable API key authentication (default: `true`). Set to `false` for local development or backward compatibility.
+- `ADMIN_API_KEY` — Optional bootstrap admin key for initial setup. If not set, generate one with `python -m src.auth.api_keys`.
+- `API_KEYS_FILE` — Path to API keys storage file (default: `data/api_keys.json`)
+
+**Note:** Admin endpoints (`/admin/*`) always require authentication, even when `AUTH_REQUIRED` is `false`.
+
 ### Rate Limiting
 - `RATE_LIMIT_QUERY` — Rate limit for `/query` and `/query/stream` endpoints (default: `20/minute`)
 - `RATE_LIMIT_UPLOAD` — Rate limit for `/upload` endpoint (default: `5/minute`)
@@ -144,6 +154,50 @@ Open the interactive API documentation at:
 http://127.0.0.1:8000/docs
 ```
 
+## Authentication
+
+The API uses API key authentication via the `X-API-Key` header. Authentication is enabled by default.
+
+### Generate an Admin Key
+
+```powershell
+python -m src.auth.api_keys
+```
+
+This prints a new admin key. Copy it — it's shown only once.
+
+Alternatively, set `ADMIN_API_KEY` in your environment:
+
+```powershell
+$env:ADMIN_API_KEY="fsr_your_key_here"
+python -m src.auth.api_keys
+```
+
+### Create Additional Keys
+
+Use the admin key to create reader or admin keys via the API:
+
+```bash
+curl -X POST http://127.0.0.1:8000/admin/keys \
+  -H "X-API-Key: YOUR_ADMIN_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "data-science-team", "role": "reader"}'
+```
+
+### Roles
+
+- **`reader`** — Can query documents via `/query` and `/query/stream`
+- **`admin`** — Can query, upload documents, and manage API keys
+
+### Disable Authentication (Local Development)
+
+```powershell
+$env:AUTH_REQUIRED="false"
+uvicorn src.api:app --reload
+```
+
+**Note:** Admin endpoints always require authentication, even when `AUTH_REQUIRED=false`.
+
 ### Available Endpoints
 
 `GET /health`
@@ -185,6 +239,33 @@ Example request:
 The response contains a grounded answer when `OPENAI_API_KEY` is configured;
 otherwise it returns an evidence status, reranked text chunks, metadata, and
 page citations.
+
+`POST /query/stream`
+
+Streams answers as Server-Sent Events (SSE). Requires `OPENAI_API_KEY`. Same request format as `/query`.
+
+### Admin Endpoints (Require Admin Key)
+
+`POST /admin/keys`
+
+Create a new API key. Request body:
+
+```json
+{
+  "name": "team-name",
+  "role": "reader"
+}
+```
+
+Returns the raw key (shown once) and key metadata.
+
+`GET /admin/keys`
+
+List all API keys (no secret material).
+
+`DELETE /admin/keys/{key_id}`
+
+Revoke an API key by its ID.
 
 ## Evaluate Retrieval
 
