@@ -1,19 +1,18 @@
-"""LLM generation for the FinSight-RAG pipeline.
+"""LLM generation for the FinSight-RAG pipeline using Google Gemini API.
 
-Provides three generation paths:
+Provides generation paths:
 - ``generate_answer()`` — local Ollama (used by the CLI pipeline).
-- ``generate_openai_answer()`` — OpenAI SDK, non-streaming.
-- ``generate_openai_answer_stream()`` — OpenAI SDK, yields token deltas.
+- ``generate_answer_grounded()`` — Gemini SDK, non-streaming.
+- ``generate_answer_grounded_stream()`` — Gemini SDK, yields token deltas.
 """
 
 from __future__ import annotations
 
 import os
 from collections.abc import Generator
-from typing import Any
 
 import requests
-from openai import OpenAI
+import google.generativeai as genai
 
 
 # ============================================================
@@ -21,9 +20,9 @@ from openai import OpenAI
 # ============================================================
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
-
 MODEL_NAME = "llama3.2:3b"
-OPENAI_MODEL = "gpt-4o-mini"
+
+GEMINI_MODEL = "gemini-3.6-flash"
 
 SYSTEM_PROMPT = (
     "You are a financial research assistant. Answer only "
@@ -42,16 +41,16 @@ COMPARISON_SYSTEM_PROMPT = (
 )
 
 
-def _openai_model() -> str:
-    return os.getenv("OPENAI_MODEL", OPENAI_MODEL)
+def _gemini_model() -> str:
+    return os.getenv("GEMINI_MODEL", GEMINI_MODEL)
 
 
-def _openai_temperature() -> float:
-    return float(os.getenv("OPENAI_TEMPERATURE", "0.1"))
+def _gemini_temperature() -> float:
+    return float(os.getenv("GEMINI_TEMPERATURE", "0.1"))
 
 
-def _openai_max_tokens() -> int | None:
-    value = os.getenv("OPENAI_MAX_TOKENS")
+def _gemini_max_tokens() -> int | None:
+    value = os.getenv("GEMINI_MAX_TOKENS")
     return int(value) if value else None
 
 
@@ -61,22 +60,32 @@ def _build_system_prompt(context: str) -> str:
     for line in context.splitlines():
         lower = line.lower()
         if lower.startswith("source:"):
-            # Lines formatted as "Source: apple-2024; Page: 3"
-            # Extract the document identifier before the semicolon.
             identifier = line.split(":")[1].split(";")[0].strip().lower()
-            # The document ID typically starts with the company name.
             companies_seen.add(identifier.split("-")[0])
     if len(companies_seen) >= 2:
         return COMPARISON_SYSTEM_PROMPT
     return SYSTEM_PROMPT
 
 
-def _get_openai_client() -> OpenAI:
-    """Build a configured OpenAI client from the environment."""
-    api_key = os.getenv("OPENAI_API_KEY")
+def _get_gemini_client() -> genai.GenerativeModel:
+    """Build a configured Gemini client from the environment."""
+    api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
-        raise ValueError("OPENAI_API_KEY is not configured")
-    return OpenAI(api_key=api_key)
+        raise ValueError("GEMINI_API_KEY is not configured")
+    genai.configure(api_key=api_key)
+    return genai.GenerativeModel(
+        model_name=_gemini_model(),
+        generation_config=genai.types.GenerationConfig(
+            temperature=_gemini_temperature(),
+            max_output_tokens=_gemini_max_tokens(),
+        ),
+    )
+
+
+def is_grounded_generation_available() -> bool:
+    """Return whether grounded generation (Gemini) is available."""
+    api_key = os.getenv("GEMINI_API_KEY")
+    return bool(api_key)
 
 
 # ============================================================
@@ -88,7 +97,7 @@ def generate_answer(
     context: str
 ) -> str:
     """
-    Generate an answer using retrieved financial context.
+    Generate an answer using retrieved financial context via local Ollama.
     """
 
     prompt = f"""
@@ -140,63 +149,49 @@ ANSWER:
     return result["response"].strip()
 
 
-def is_openai_configured() -> bool:
-    """Return whether the optional grounded OpenAI path can be used."""
-    return bool(os.getenv("OPENAI_API_KEY"))
+# ============================================================
+# Gemini SDK generation  (non-streaming)
+# ============================================================
+
+def generate_answer_grounded(question: str, context: str) -> str:
+    """Generate a citation-aware answer using Gemini API."""
+    model = _get_gemini_client()
+
+    system_prompt = _build_system_prompt(context)
+    user_message = f"SOURCES:\n{context}\n\nQUESTION:\n{question}"
+
+    response = model.generate_content(
+        [
+            {"role": "user", "parts": [system_prompt, user_message]}
+        ]
+    )
+
+    return response.text.strip()
 
 
 # ============================================================
-# OpenAI SDK generation  (non-streaming)
+# Gemini SDK generation  (streaming — yields token deltas)
 # ============================================================
 
-def generate_openai_answer(question: str, context: str) -> str:
-    """Generate a citation-aware answer using only retrieved context."""
-    client = _get_openai_client()
-
-    kwargs: dict[str, Any] = {
-        "model": _openai_model(),
-        "temperature": _openai_temperature(),
-        "messages": [
-            {"role": "system", "content": _build_system_prompt(context)},
-            {"role": "user", "content": f"SOURCES:\n{context}\n\nQUESTION:\n{question}"},
-        ],
-    }
-    max_tokens = _openai_max_tokens()
-    if max_tokens is not None:
-        kwargs["max_tokens"] = max_tokens
-
-    completion = client.chat.completions.create(**kwargs)
-    return completion.choices[0].message.content.strip()
-
-
-# ============================================================
-# OpenAI SDK generation  (streaming — yields token deltas)
-# ============================================================
-
-def generate_openai_answer_stream(
+def generate_answer_grounded_stream(
     question: str, context: str,
 ) -> Generator[str, None, None]:
-    """Yield answer tokens as they arrive from the OpenAI API."""
-    client = _get_openai_client()
+    """Yield answer tokens as they arrive from the Gemini API."""
+    model = _get_gemini_client()
 
-    kwargs: dict[str, Any] = {
-        "model": _openai_model(),
-        "temperature": _openai_temperature(),
-        "stream": True,
-        "messages": [
-            {"role": "system", "content": _build_system_prompt(context)},
-            {"role": "user", "content": f"SOURCES:\n{context}\n\nQUESTION:\n{question}"},
+    system_prompt = _build_system_prompt(context)
+    user_message = f"SOURCES:\n{context}\n\nQUESTION:\n{question}"
+
+    stream = model.generate_content(
+        [
+            {"role": "user", "parts": [system_prompt, user_message]}
         ],
-    }
-    max_tokens = _openai_max_tokens()
-    if max_tokens is not None:
-        kwargs["max_tokens"] = max_tokens
+        stream=True,
+    )
 
-    stream = client.chat.completions.create(**kwargs)
     for chunk in stream:
-        delta = chunk.choices[0].delta if chunk.choices else None
-        if delta and delta.content:
-            yield delta.content
+        if chunk.text:
+            yield chunk.text
 
 
 # ============================================================
@@ -216,9 +211,9 @@ Total net sales were $391,035 million in 2024.
         "in fiscal year 2025?"
     )
 
-    print("\nGenerating answer...\n")
+    print("\nGenerating answer with Gemini...\n")
 
-    answer = generate_answer(
+    answer = generate_answer_grounded(
         test_question,
         test_context
     )

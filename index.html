@@ -1,0 +1,861 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FinSight-RAG - API Tester</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 14px;
+        }
+
+        .content {
+            padding: 30px;
+        }
+
+        .section {
+            margin-bottom: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+        }
+
+        .section h2 {
+            color: #333;
+            font-size: 18px;
+            margin-bottom: 15px;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            color: #555;
+            font-weight: 500;
+            font-size: 14px;
+        }
+
+        input[type="text"],
+        input[type="file"],
+        textarea,
+        select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-family: inherit;
+            font-size: 14px;
+        }
+
+        textarea {
+            resize: vertical;
+            min-height: 80px;
+        }
+
+        input[type="text"]:focus,
+        textarea:focus,
+        select:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 5px rgba(102, 126, 234, 0.3);
+        }
+
+        button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 12px 25px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+
+        button:hover {
+            background: #764ba2;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        .response {
+            margin-top: 15px;
+            padding: 15px;
+            background: white;
+            border-radius: 5px;
+            border: 1px solid #ddd;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        .response pre {
+            font-size: 12px;
+            color: #333;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .status {
+            display: inline-block;
+            padding: 5px 10px;
+            border-radius: 3px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-top: 10px;
+        }
+
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .status.loading {
+            background: #e2e3e5;
+            color: #383d41;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        @media (max-width: 768px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+
+            .header h1 {
+                font-size: 24px;
+            }
+
+            .content {
+                padding: 20px;
+            }
+        }
+
+        .loading-spinner {
+            display: inline-block;
+            width: 15px;
+            height: 15px;
+            border: 3px solid rgba(102, 126, 234, 0.3);
+            border-top-color: #667eea;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .file-list {
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 12px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .file-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px;
+            background: #f0f4ff;
+            border-radius: 4px;
+            margin-bottom: 8px;
+            border-left: 3px solid #667eea;
+        }
+
+        .file-item:last-child {
+            margin-bottom: 0;
+        }
+
+        .file-info {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 0;
+        }
+
+        .file-icon {
+            font-size: 20px;
+            flex-shrink: 0;
+        }
+
+        .file-details {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .file-name {
+            font-weight: 600;
+            color: #333;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            font-size: 14px;
+        }
+
+        .file-size {
+            font-size: 12px;
+            color: #999;
+            margin-top: 2px;
+        }
+
+        .file-actions {
+            display: flex;
+            gap: 8px;
+            flex-shrink: 0;
+            margin-left: 10px;
+        }
+
+        .file-remove-btn {
+            background: #ff6b6b;
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            transition: all 0.3s;
+            flex-shrink: 0;
+        }
+
+        .file-remove-btn:hover {
+            background: #ee5a52;
+            transform: scale(1.05);
+        }
+
+        .file-remove-btn:active {
+            transform: scale(0.95);
+        }
+
+        .clear-all-btn {
+            background: #ff8787;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 600;
+            margin-top: 8px;
+            width: 100%;
+            transition: all 0.3s;
+        }
+
+        .clear-all-btn:hover {
+            background: #ff6b6b;
+        }
+
+        .upload-stats {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-top: 1px solid #ddd;
+            margin-top: 10px;
+            font-size: 13px;
+            color: #666;
+        }
+
+        .upload-stats-info {
+            display: flex;
+            gap: 20px;
+        }
+
+        .stat-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .stat-label {
+            color: #999;
+        }
+
+        .stat-value {
+            font-weight: 600;
+            color: #667eea;
+        }
+
+        .drop-zone {
+            border: 2px dashed #667eea;
+            border-radius: 8px;
+            padding: 30px;
+            text-align: center;
+            background: #f0f4ff;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            min-height: 120px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .drop-zone:hover {
+            border-color: #764ba2;
+            background: #e8ecff;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.2);
+        }
+
+        .drop-zone.drag-over {
+            border-color: #764ba2;
+            background: #e8ecff;
+            box-shadow: 0 8px 20px rgba(102, 126, 234, 0.3);
+            transform: scale(1.02);
+        }
+
+        .drop-zone-content {
+            pointer-events: none;
+        }
+
+        .drop-zone-text {
+            font-size: 16px;
+            font-weight: 600;
+            color: #667eea;
+            margin: 0 0 8px 0;
+        }
+
+        .drop-zone-subtext {
+            font-size: 12px;
+            color: #999;
+            margin: 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 FinSight-RAG API Tester</h1>
+            <p>Test your financial document retrieval API</p>
+        </div>
+
+        <div class="content">
+            <!-- API Configuration -->
+            <div class="section">
+                <h2>⚙️ Configuration</h2>
+                <div class="form-group">
+                    <label for="apiUrl">API URL:</label>
+                    <input type="text" id="apiUrl" value="http://127.0.0.1:8000" />
+                </div>
+                <div class="form-group">
+                    <label for="apiKey">API Key:</label>
+                    <input type="text" id="apiKey" placeholder="fsr_..." />
+                </div>
+            </div>
+
+            <!-- Health Check -->
+            <div class="section">
+                <h2>🏥 Health Check</h2>
+                <button onclick="testHealth()">Test Health Endpoint</button>
+                <div id="healthResponse" class="response" style="display:none;">
+                    <pre id="healthResponseText"></pre>
+                </div>
+            </div>
+
+            <!-- Smart Upload Section (Combined) -->
+            <div class="section">
+                <h2>📤 Smart Upload (Auto-Mode)</h2>
+                <p style="font-size: 13px; color: #666; margin-bottom: 15px;">
+                    ✨ <strong>Auto-Mode:</strong> 1 file = instant (sync), 2+ files = queued (async)
+                    | <strong>Manual:</strong> Choose mode explicitly
+                </p>
+
+                <div class="grid">
+                    <!-- File Upload Area -->
+                    <div>
+                        <div class="form-group">
+                            <label>📁 Select PDFs:</label>
+                            <div id="dropZone" class="drop-zone">
+                                <div class="drop-zone-content">
+                                    <p class="drop-zone-text">📂 Drop PDFs here</p>
+                                    <p class="drop-zone-subtext">or click "Add Files"</p>
+                                </div>
+                                <input type="file" id="uploadFile" accept=".pdf" multiple style="display:none;" />
+                            </div>
+                            <button type="button" onclick="document.getElementById('uploadFile').click()" style="margin-top: 10px; background: #667eea; width: 100%;">➕ Add Files</button>
+                            <div id="uploadFileList" class="file-list" style="display:none; margin-top: 10px;"></div>
+                        </div>
+                    </div>
+
+                    <!-- Metadata & Mode -->
+                    <div>
+                        <div class="form-group">
+                            <label for="uploadCompany">Company:</label>
+                            <input type="text" id="uploadCompany" placeholder="e.g., Apple" />
+                        </div>
+                        <div class="form-group">
+                            <label for="uploadDocType">Document Type:</label>
+                            <input type="text" id="uploadDocType" value="10-K" />
+                        </div>
+                        <div class="form-group">
+                            <label for="uploadFiscalYear">Fiscal Year:</label>
+                            <input type="text" id="uploadFiscalYear" value="2025" />
+                        </div>
+                        <div class="form-group">
+                            <label for="uploadQuarter">Quarter:</label>
+                            <input type="text" id="uploadQuarter" value="FY" />
+                        </div>
+                        <div class="form-group">
+                            <label for="uploadMode">Processing Mode:</label>
+                            <select id="uploadMode">
+                                <option value="auto">🤖 Auto (1 file = sync, 2+ = async)</option>
+                                <option value="sync">⚡ Sync (wait for all files)</option>
+                                <option value="async">📦 Async (queue for background)</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <button onclick="smartUpload()" id="uploadBtn" style="width: 100%; margin-top: 15px; padding: 14px;">🚀 Upload (Smart Mode)</button>
+                <div id="uploadResponse" class="response" style="display:none; margin-top: 15px;">
+                    <pre id="uploadResponseText"></pre>
+                </div>
+            </div>
+
+            <!-- Smart Query (Unified) -->
+            <div class="section">
+                <h2>🔍 Smart Query</h2>
+                <p style="font-size: 13px; color: #666; margin-bottom: 15px;">
+                    ✨ <strong>Default:</strong> Streaming (real-time) | <strong>Toggle:</strong> Switch to direct response
+                </p>
+
+                <div class="form-group">
+                    <label for="smartQuestion">Question:</label>
+                    <textarea id="smartQuestion" placeholder="e.g., What was Apple's total revenue in 2025?"></textarea>
+                </div>
+
+                <div class="grid" style="grid-template-columns: 2fr 1fr;">
+                    <div>
+                        <div class="form-group">
+                            <label for="smartQueryCompany">Company (optional):</label>
+                            <input type="text" id="smartQueryCompany" placeholder="e.g., Apple" />
+                        </div>
+                        <div class="form-group">
+                            <label for="smartTopK">Top K Results:</label>
+                            <input type="text" id="smartTopK" value="5" />
+                        </div>
+                    </div>
+                    <div>
+                        <div class="form-group">
+                            <label for="smartStream">Response Mode:</label>
+                            <select id="smartStream">
+                                <option value="true">📡 Stream (Real-time)</option>
+                                <option value="false">⚡ Direct (Instant)</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <button onclick="smartQuery()" id="queryBtn" style="width: 100%; padding: 14px;">🚀 Ask Question</button>
+                <div id="smartQueryResponse" class="response" style="display:none;">
+                    <pre id="smartQueryResponseText"></pre>
+                </div>
+            </div>
+
+            <!-- Admin Keys -->
+            <div class="section">
+                <h2>🔑 Admin Keys</h2>
+                <div style="background: #f0f4ff; padding: 10px; border-radius: 5px; margin-bottom: 15px; font-size: 12px;">
+                    <strong>Debug Info:</strong><br>
+                    API URL: <span id="debugUrl" style="color: #667eea;">-</span><br>
+                    API Key: <span id="debugKey" style="color: #667eea;">-</span><br>
+                    <button type="button" onclick="debugCheck()" style="margin-top: 8px; padding: 6px 12px; font-size: 11px;">🔍 Check Config</button>
+                </div>
+                <button onclick="listKeys()">📋 List All Keys</button>
+                <button onclick="createKey()" style="margin-left: 10px;">➕ Create New Key</button>
+                <div id="keysResponse" class="response" style="display:none;">
+                    <pre id="keysResponseText"></pre>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let selectedFiles = [];
+        let selectedBatchFiles = [];
+        let smartUploadFiles = [];
+
+        function getApiUrl() { return document.getElementById('apiUrl').value; }
+        function getApiKey() { return document.getElementById('apiKey').value; }
+
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+        }
+
+        function updateFileList(fileListId, filesArray, removeCallback) {
+            const fileList = document.getElementById(fileListId);
+
+            if (filesArray.length === 0) {
+                fileList.style.display = 'none';
+                return;
+            }
+
+            fileList.style.display = 'block';
+            fileList.innerHTML = '';
+
+            filesArray.forEach((file, index) => {
+                const fileItem = document.createElement('div');
+                fileItem.className = 'file-item';
+                fileItem.innerHTML = `
+                    <div class="file-info">
+                        <div class="file-icon">📄</div>
+                        <div class="file-details">
+                            <div class="file-name" title="${file.name}">${file.name}</div>
+                            <div class="file-size">${formatFileSize(file.size)}</div>
+                        </div>
+                    </div>
+                    <div class="file-actions">
+                        <button class="file-remove-btn" onclick="${removeCallback}(${index})">✕ Remove</button>
+                    </div>
+                `;
+                fileList.appendChild(fileItem);
+            });
+
+            const stats = document.createElement('div');
+            stats.className = 'upload-stats';
+            const totalSize = filesArray.reduce((sum, f) => sum + f.size, 0);
+            const clearBtnCallback = removeCallback.includes('Smart') ? 'clearSmartFiles' : removeCallback.includes('Batch') ? 'clearAllBatchFiles' : 'clearAllFiles';
+            stats.innerHTML = `
+                <div class="upload-stats-info">
+                    <div class="stat-item">
+                        <span class="stat-label">Files:</span>
+                        <span class="stat-value">${filesArray.length}</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Total Size:</span>
+                        <span class="stat-value">${formatFileSize(totalSize)}</span>
+                    </div>
+                </div>
+                <button class="clear-all-btn" onclick="${clearBtnCallback}()">Clear All</button>
+            `;
+            fileList.appendChild(stats);
+        }
+
+        // Smart Upload File Management
+        function removeSmartFile(index) {
+            smartUploadFiles.splice(index, 1);
+            updateFileList('uploadFileList', smartUploadFiles, 'removeSmartFile');
+        }
+
+        function clearSmartFiles() {
+            smartUploadFiles = [];
+            document.getElementById('uploadFile').value = '';
+            updateFileList('uploadFileList', smartUploadFiles, 'removeSmartFile');
+        }
+
+        document.getElementById('uploadFile').addEventListener('change', function() {
+            const newFiles = Array.from(this.files);
+            smartUploadFiles = [...smartUploadFiles, ...newFiles];
+            this.value = '';
+            updateFileList('uploadFileList', smartUploadFiles, 'removeSmartFile');
+        });
+
+        // Drag and drop for smart upload
+        const dropZone = document.getElementById('dropZone');
+        const uploadFileInput = document.getElementById('uploadFile');
+
+        dropZone.addEventListener('click', () => {
+            uploadFileInput.click();
+        });
+
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, preventDefaults, false);
+        });
+
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dropZone.addEventListener(eventName, () => {
+                dropZone.classList.add('drag-over');
+            }, false);
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, () => {
+                dropZone.classList.remove('drag-over');
+            }, false);
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            preventDefaults(e);
+            dropZone.classList.remove('drag-over');
+
+            const dt = e.dataTransfer;
+            const droppedFiles = dt.files;
+            smartUploadFiles = [...smartUploadFiles, ...Array.from(droppedFiles).filter(f => f.name.toLowerCase().endsWith('.pdf'))];
+            updateFileList('uploadFileList', smartUploadFiles, 'removeSmartFile');
+        }, false);
+
+        function showResponse(elementId, data, isError = false) {
+            const elem = document.getElementById(elementId);
+            const textElem = document.getElementById(elementId + 'Text');
+            elem.style.display = 'block';
+            textElem.textContent = JSON.stringify(data, null, 2);
+            elem.className = 'response ' + (isError ? 'error' : 'success');
+        }
+
+        // Smart Upload - Single Unified Endpoint
+        async function smartUpload() {
+            if (smartUploadFiles.length === 0) {
+                alert('Please select at least one PDF file');
+                return;
+            }
+
+            const uploadBtn = document.getElementById('uploadBtn');
+            const originalText = uploadBtn.textContent;
+            uploadBtn.disabled = true;
+            uploadBtn.textContent = 'Uploading...';
+
+            try {
+                const formData = new FormData();
+
+                // Add all selected files
+                smartUploadFiles.forEach(file => {
+                    formData.append('files', file);
+                });
+
+                formData.append('company', document.getElementById('uploadCompany').value);
+                formData.append('document_type', document.getElementById('uploadDocType').value);
+                formData.append('fiscal_year', document.getElementById('uploadFiscalYear').value);
+                formData.append('quarter', document.getElementById('uploadQuarter').value);
+                formData.append('mode', document.getElementById('uploadMode').value);
+
+                const response = await fetch(`${getApiUrl()}/upload`, {
+                    method: 'POST',
+                    headers: { 'X-API-Key': getApiKey() },
+                    body: formData
+                });
+                const data = await response.json();
+                showResponse('uploadResponse', data, response.status >= 400);
+
+                // Clear files on successful upload
+                if (response.status === 201 || response.status === 202) {
+                    clearSmartFiles();
+                }
+            } catch (error) {
+                showResponse('uploadResponse', { error: error.message }, true);
+            } finally {
+                uploadBtn.disabled = false;
+                uploadBtn.textContent = originalText;
+            }
+        }
+
+        async function testHealth() {
+            try {
+                const response = await fetch(`${getApiUrl()}/health`);
+                const data = await response.json();
+                showResponse('healthResponse', data);
+            } catch (error) {
+                showResponse('healthResponse', { error: error.message }, true);
+            }
+        }
+
+
+        async function queryDocuments() {
+            const payload = {
+                question: document.getElementById('smartQuestion').value,
+                company: document.getElementById('smartQueryCompany').value || null,
+                top_k: parseInt(document.getElementById('smartTopK').value)
+            };
+
+            const stream = document.getElementById('smartStream').value === 'true';
+
+            try {
+                // DIRECT RESPONSE MODE
+                if (!stream) {
+                    const response = await fetch(`${getApiUrl()}/query?stream=false`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-API-Key': getApiKey()
+                        },
+                        body: JSON.stringify(payload)
+                    });
+                    const data = await response.json();
+                    showResponse('smartQueryResponse', data, response.status >= 400);
+                    return;
+                }
+
+                // STREAMING MODE
+                const elem = document.getElementById('smartQueryResponse');
+                const textElem = document.getElementById('smartQueryResponseText');
+                elem.style.display = 'block';
+                textElem.textContent = 'Loading answer...\n\n';
+
+                const response = await fetch(`${getApiUrl()}/query?stream=true`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-API-Key': getApiKey()
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let result = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value);
+                    const lines = chunk.split('\n');
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            try {
+                                const data = JSON.parse(line.slice(6));
+                                if (data.token) result += data.token;
+                                textElem.textContent = result;
+                            } catch (e) { }
+                        }
+                    }
+                }
+            } catch (error) {
+                showResponse('smartQueryResponse', { error: error.message }, true);
+            }
+        }
+
+        // Alias for backward compatibility
+        async function smartQuery() {
+            return queryDocuments();
+        }
+
+        async function listKeys() {
+            const url = getApiUrl();
+            const key = getApiKey();
+
+            console.log('ListKeys - URL:', url, 'Key:', key ? key.substring(0, 10) + '...' : 'EMPTY');
+
+            if (!key) {
+                alert('❌ Error: API Key is empty! Please fill it in the Configuration section.');
+                return;
+            }
+
+            try {
+                const response = await fetch(`${url}/admin/keys`, {
+                    method: 'GET',
+                    headers: {
+                        'X-API-Key': key
+                    }
+                });
+                const data = await response.json();
+                showResponse('keysResponse', data, response.status >= 400);
+            } catch (error) {
+                showResponse('keysResponse', { error: error.message }, true);
+            }
+        }
+
+        async function createKey() {
+            const url = getApiUrl();
+            const key = getApiKey();
+
+            if (!key) {
+                alert('❌ Error: API Key is empty! Please fill it in the Configuration section.');
+                return;
+            }
+
+            const keyName = prompt('Enter key name:', 'test-reader-key');
+            if (!keyName) return;
+
+            const payload = {
+                name: keyName,
+                role: 'reader'
+            };
+
+            try {
+                const response = await fetch(`${url}/admin/keys`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-API-Key': key
+                    },
+                    body: JSON.stringify(payload)
+                });
+                const data = await response.json();
+                showResponse('keysResponse', data, response.status >= 400);
+            } catch (error) {
+                showResponse('keysResponse', { error: error.message }, true);
+            }
+        }
+
+        function debugCheck() {
+            const url = getApiUrl();
+            const key = getApiKey();
+
+            document.getElementById('debugUrl').textContent = url || '❌ EMPTY';
+            document.getElementById('debugKey').textContent = key ? '✅ ' + key.substring(0, 20) + '...' : '❌ EMPTY';
+
+            if (!url || !key) {
+                alert('❌ Configuration incomplete!\n\nFill in both fields:\n1. API URL\n2. API Key');
+            } else {
+                alert('✅ Configuration looks good!\n\nURL: ' + url + '\nKey: ' + key.substring(0, 20) + '...');
+            }
+        }
+    </script>
+</body>
+</html>

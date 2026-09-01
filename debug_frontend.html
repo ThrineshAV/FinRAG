@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>FinSight-RAG - DEBUG Frontend</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 { color: #333; }
+        .section {
+            background: #f0f0f0;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 5px;
+            border-left: 4px solid #667eea;
+        }
+        input, button {
+            padding: 10px;
+            margin: 5px 0;
+            width: 100%;
+            font-size: 14px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        button {
+            background: #667eea;
+            color: white;
+            cursor: pointer;
+            border: none;
+        }
+        button:hover { background: #764ba2; }
+        .log {
+            background: #222;
+            color: #0f0;
+            padding: 15px;
+            border-radius: 4px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+            margin: 10px 0;
+        }
+        .log-entry {
+            margin: 5px 0;
+            padding: 3px 0;
+            border-bottom: 1px solid #444;
+        }
+        .error { color: #f00; }
+        .success { color: #0f0; }
+        .info { color: #0ff; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔧 FinSight-RAG - DEBUG FRONTEND</h1>
+
+        <div class="section">
+            <h2>Configuration</h2>
+            <label>API URL:</label>
+            <input type="text" id="apiUrl" value="http://127.0.0.1:8000" />
+
+            <label style="margin-top: 10px;">API Key:</label>
+            <input type="text" id="apiKey" value="fsr_test_admin_key" />
+        </div>
+
+        <div class="section">
+            <h2>Test Request</h2>
+            <button onclick="testRequest()">🧪 Send Test Request to /admin/keys</button>
+            <button onclick="clearLog()" style="background: #999; margin-top: 10px;">Clear Log</button>
+        </div>
+
+        <div class="section">
+            <h2>📋 Request Log</h2>
+            <div class="log" id="log"></div>
+        </div>
+
+        <div class="section">
+            <h2>Browser Info</h2>
+            <p id="browserInfo"></p>
+        </div>
+    </div>
+
+    <script>
+        function log(message, type = 'info') {
+            const logDiv = document.getElementById('log');
+            const entry = document.createElement('div');
+            entry.className = 'log-entry ' + type;
+            const timestamp = new Date().toLocaleTimeString();
+            entry.textContent = `[${timestamp}] ${message}`;
+            logDiv.appendChild(entry);
+            logDiv.scrollTop = logDiv.scrollHeight;
+            console.log(`[${type}] ${message}`);
+        }
+
+        function clearLog() {
+            document.getElementById('log').innerHTML = '';
+        }
+
+        function showBrowserInfo() {
+            const info = `
+                User Agent: ${navigator.userAgent}
+                Platform: ${navigator.platform}
+                Language: ${navigator.language}
+                Online: ${navigator.onLine}
+            `;
+            document.getElementById('browserInfo').innerHTML = '<pre>' + info + '</pre>';
+        }
+
+        async function testRequest() {
+            clearLog();
+            const url = document.getElementById('apiUrl').value;
+            const key = document.getElementById('apiKey').value;
+
+            log('=== Starting Test Request ===', 'info');
+            log(`URL: ${url}`, 'info');
+            log(`Key: ${key ? key.substring(0, 10) + '...' : 'EMPTY'}`, 'info');
+            log('Browser Online: ' + navigator.onLine, 'info');
+
+            if (!url || !key) {
+                log('❌ ERROR: URL or Key is empty!', 'error');
+                return;
+            }
+
+            try {
+                log('📤 Sending fetch request...', 'info');
+
+                const response = await fetch(`${url}/admin/keys`, {
+                    method: 'GET',
+                    headers: {
+                        'X-API-Key': key,
+                        'Content-Type': 'application/json'
+                    },
+                    mode: 'cors'
+                });
+
+                log(`📥 Response received! Status: ${response.status}`, 'success');
+                log(`Content-Type: ${response.headers.get('content-type')}`, 'info');
+
+                const data = await response.json();
+                log(`✅ Response body: ${JSON.stringify(data).substring(0, 100)}...`, 'success');
+
+                if (response.status === 200) {
+                    log('✅ SUCCESS! Request worked!', 'success');
+                } else {
+                    log(`⚠️ Status ${response.status}: ${JSON.stringify(data)}`, 'error');
+                }
+
+            } catch (error) {
+                log(`❌ ERROR: ${error.message}`, 'error');
+                log(`Stack: ${error.stack}`, 'error');
+
+                // Check if it's a network error
+                if (error.message.includes('Failed to fetch')) {
+                    log('💡 HINT: This usually means CORS is blocked or server is not running', 'error');
+                    log('💡 TRY: Make sure server is running on http://127.0.0.1:8000', 'error');
+                }
+            }
+
+            log('=== Test Complete ===', 'info');
+        }
+
+        // Show browser info on load
+        window.addEventListener('load', () => {
+            showBrowserInfo();
+            log('Page loaded and ready for testing', 'success');
+        });
+    </script>
+</body>
+</html>

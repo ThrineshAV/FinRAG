@@ -12,9 +12,11 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
 
+from dotenv import load_dotenv
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile, status
 from fastapi.responses import JSONResponse, StreamingResponse
-from openai import OpenAIError
+from fastapi.openapi.utils import get_openapi
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -29,9 +31,9 @@ from src.embeddings.embedder import load_vector_store
 from src.ingestion.sec_ingestion import extract_pdf_pages
 from src.processing.chunker import create_page_chunks
 from src.generation.llm import (
-    generate_openai_answer,
-    generate_openai_answer_stream,
-    is_openai_configured,
+    generate_answer_grounded,
+    generate_answer_grounded_stream,
+    is_grounded_generation_available,
 )
 from src.retrieval.retriever import retrieve_documents
 
@@ -39,9 +41,50 @@ logger = logging.getLogger(__name__)
 
 # Rate limiting configuration
 limiter = Limiter(key_func=get_remote_address)
-app = FastAPI(title="FinSight-RAG", version="1.0.0")
+app = FastAPI(
+    title="FinSight-RAG",
+    version="1.0.0",
+)
+
+# ✅ LOAD .env FILE - READS ENVIRONMENT VARIABLES
+load_dotenv()
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# ✅ ADD CORS MIDDLEWARE - ALLOWS FRONTEND TO COMMUNICATE WITH BACKEND
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins (for development/testing)
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all HTTP methods (GET, POST, DELETE, etc.)
+    allow_headers=["*"],  # Allow all headers (including X-API-Key)
+)
+
+# Custom OpenAPI with security scheme
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+
+    openapi_schema = get_openapi(
+        title="FinSight-RAG",
+        version="1.0.0",
+        routes=app.routes,
+    )
+
+    # Add security scheme for API Key
+    openapi_schema["components"]["securitySchemes"] = {
+        "APIKeyHeader": {
+            "type": "apiKey",
+            "in": "header",
+            "name": "X-API-Key",
+            "description": "API Key for authentication. Pass via X-API-Key header.",
+        }
+    }
+
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+app.openapi = custom_openapi
 
 ingestion_lock = asyncio.Lock()
 
@@ -202,73 +245,92 @@ async def readiness() -> dict[str, str]:
     return {"status": "ready"}
 
 
-@app.post("/upload", response_model=UploadResponse, status_code=status.HTTP_201_CREATED)
+@app.post("/upload")
 @limiter.limit(RATE_LIMIT_UPLOAD)
 async def upload_pdf(
     request: Request,
-    file: UploadFile = File(...),
-    company: str = Form(...),
-    document_type: str = Form(...),
-    fiscal_year: str = Form(...),
-    quarter: str = Form(...),
-    _key: APIKeyRecord | None = Depends(require_upload),
-) -> UploadResponse:
-    """Extract, chunk, embed, and index an uploaded financial PDF."""
-    _ = _key
-    if not file.filename or not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Only PDF files are supported")
-
-    # Check file size via Content-Length header
-    content_length = request.headers.get("content-length")
-    if content_length and int(content_length) > MAX_UPLOAD_SIZE:
-        max_mb = MAX_UPLOAD_SIZE / (1024 * 1024)
-        raise HTTPException(
-            status_code=413,
-            detail=f"File size exceeds maximum allowed size of {max_mb:.0f} MB"
-        )
-
-    temporary_path: Path | None = None
-    metadata = {
-        "company": company,
-        "document_type": document_type,
-        "fiscal_year": fiscal_year,
-        "quarter": quarter,
-        "document_id": Path(file.filename).stem,
-    }
-
-    try:
-        with NamedTemporaryFile(delete=False, suffix=".pdf") as temporary_file:
-            temporary_file.write(await file.read())
-            temporary_path = Path(temporary_file.name)
-
-        pages = extract_pdf_pages(temporary_path)
-        chunks = create_page_chunks(pages, metadata)
-        embeddings = generate_embeddings(chunks)
-        store_embeddings(chunks, embeddings)
-        cache = get_cache_manager()
-        cache.clear("finsight:query:")
-        cache.clear("finsight:query_stream:")
-        return UploadResponse(
-            filename=file.filename,
-            chunks_indexed=len(chunks),
-            metadata={key: value for key, value in metadata.items() if key != "document_id"},
-        )
-    except (FileNotFoundError, ValueError) as exc:
-        logger.warning("PDF indexing failed: %s", exc)
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-@app.post("/upload/batch", status_code=status.HTTP_202_ACCEPTED)
-async def upload_batch(
     background_tasks: BackgroundTasks,
-    files: list[UploadFile] = File(...),
+    files: list[UploadFile] = File(..., description="Multiple PDF files to upload"),
     company: str = Form(...),
     document_type: str = Form(...),
     fiscal_year: str = Form(...),
     quarter: str = Form(...),
+    mode: str = Form("auto", description="Processing mode: 'auto', 'sync', or 'async'"),
     _key: APIKeyRecord | None = Depends(require_upload),
-) -> dict[str, str]:
-    """Queue multiple PDFs for extraction, chunking, and indexing in the background."""
-    job_id = str(uuid4())
+):
+    """Smart Upload: Extract, chunk, embed, and index financial PDFs.
+
+    Intelligently handles both single and multiple files with sync/async options.
+
+    Request body (multipart/form-data):
+    - files: Upload one or more PDF files
+    - company: Company name
+    - document_type: Document type (10-K, 10-Q, etc.)
+    - fiscal_year: Fiscal year (2024, etc.)
+    - quarter: Quarter (Q1, Q2, FY, etc.)
+    - mode: Processing mode (optional, default: "auto")
+      * "auto": 1 file = sync (201), 2+ files = async (202)
+      * "sync": Always synchronous, wait for all files (201)
+      * "async": Always asynchronous, queue for background (202)
+
+    Returns (Sync Mode - 201):
+        List of upload results with filename and chunks indexed for each file
+        [
+          {"filename": "doc.pdf", "chunks_indexed": 45, "metadata": {...}},
+          ...
+        ]
+
+    Returns (Async Mode - 202):
+        Job status with job_id for tracking
+        {"status": "accepted", "job_id": "uuid", "file_count": 3, "mode": "async"}
+
+    HTTP Status:
+    - 201 Created (sync mode: all files processed)
+    - 202 Accepted (async mode: files queued)
+
+    Example cURL (Auto mode):
+        curl -X POST http://127.0.0.1:8000/upload \\
+          -F "files=@file1.pdf" \\
+          -F "files=@file2.pdf" \\
+          -F "company=Apple" \\
+          -F "document_type=10-K" \\
+          -F "fiscal_year=2024" \\
+          -F "quarter=Q1" \\
+          -H "X-API-Key: your_key"
+
+    Example cURL (Force async):
+        curl -X POST http://127.0.0.1:8000/upload \\
+          -F "files=@large_file.pdf" \\
+          -F "mode=async" \\
+          -F "company=Apple" \\
+          -F "document_type=10-K" \\
+          -F "fiscal_year=2024" \\
+          -F "quarter=Q1" \\
+          -H "X-API-Key: your_key"
+    """
+    _ = (request, _key)
+
+    if not files or len(files) == 0:
+        raise HTTPException(status_code=400, detail="At least one PDF file is required")
+
+    # Validate all files are PDFs
+    for file in files:
+        if not file.filename or not file.filename.lower().endswith(".pdf"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"File '{file.filename}' must be a PDF. Only PDF files are supported."
+            )
+
+    # Determine processing mode
+    if mode == "auto":
+        use_async = len(files) > 1
+    elif mode == "async":
+        use_async = True
+    elif mode == "sync":
+        use_async = False
+    else:
+        raise HTTPException(status_code=400, detail="mode must be 'auto', 'sync', or 'async'")
+
     metadata = {
         "company": company,
         "document_type": document_type,
@@ -276,13 +338,66 @@ async def upload_batch(
         "quarter": quarter,
     }
 
-    async def _process_batch_coro():
-        for file in files:
-            async with ingestion_lock:
-                await _process_single_file(file, metadata)
+    # ASYNC MODE: Queue for background processing
+    if use_async:
+        job_id = str(uuid4())
 
-    background_tasks.add_task(_process_batch_coro)
-    return {"status": "accepted", "job_id": job_id}
+        async def _process_async():
+            for file in files:
+                async with ingestion_lock:
+                    await _process_single_file(file, metadata)
+
+        background_tasks.add_task(_process_async)
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content={
+                "status": "accepted",
+                "job_id": job_id,
+                "file_count": len(files),
+                "mode": "async",
+                "message": f"Queued {len(files)} file(s) for background processing. Use job_id to track status."
+            }
+        )
+
+    # SYNC MODE: Process immediately and return results
+    results: list[UploadResponse] = []
+
+    for file in files:
+        temporary_path: Path | None = None
+        try:
+            with NamedTemporaryFile(delete=False, suffix=".pdf") as temporary_file:
+                temporary_file.write(await file.read())
+                temporary_path = Path(temporary_file.name)
+
+            pages = extract_pdf_pages(temporary_path)
+            chunks = create_page_chunks(pages, {**metadata, "document_id": Path(file.filename).stem})
+            embeddings = generate_embeddings(chunks)
+            store_embeddings(chunks, embeddings)
+
+            results.append(UploadResponse(
+                filename=file.filename,
+                chunks_indexed=len(chunks),
+                metadata={key: value for key, value in metadata.items() if key != "document_id"},
+            ))
+        except (FileNotFoundError, ValueError) as exc:
+            logger.warning("PDF indexing failed for %s: %s", file.filename, exc)
+            raise HTTPException(
+                status_code=422,
+                detail=f"Failed to index '{file.filename}': {str(exc)}"
+            ) from exc
+        finally:
+            if temporary_path and temporary_path.exists():
+                temporary_path.unlink(missing_ok=True)
+
+    # Clear cache after sync processing
+    cache = get_cache_manager()
+    cache.clear("finsight:query:")
+    cache.clear("finsight:query_stream:")
+
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED,
+        content=[r.model_dump() for r in results]
+    )
 
 
 async def _process_single_file(file: UploadFile, metadata: dict[str, Any]) -> None:
@@ -307,24 +422,58 @@ async def _process_single_file(file: UploadFile, metadata: dict[str, Any]) -> No
         logger.error("Background ingestion failed for file %s: %s", file.filename, exc)
 
 
-@app.post("/query", response_model=QueryResponse)
+@app.post("/query")
 @limiter.limit(RATE_LIMIT_QUERY)
 async def query_documents(
     request: Request,
-    response: Response,
     query_request: QueryRequest,
+    stream: str = "true",
     _key: APIKeyRecord | None = Depends(require_api_key),
-) -> QueryResponse:
-    """Retrieve relevant chunks with metadata and page citations, using cache when available."""
-    _ = (request, _key)
-    openai_enabled = is_openai_configured()
-    cache_key = _query_cache_key("query", query_request, openai_enabled=openai_enabled)
-    cached_response = _cache_lookup(cache_key, "query")
-    if cached_response is not None:
-        response.headers["X-Cache"] = "HIT"
-        return cached_response
+):
+    """Smart Query: Retrieve and optionally stream answer.
 
-    response.headers["X-Cache"] = "MISS"
+    Intelligently handles both direct query responses and streaming answers.
+
+    Query Parameters:
+    - stream: Response mode (optional, default: "true")
+        * "true": Stream answer token-by-token (SSE format) - Real-time 🎯
+        * "false": Direct JSON response - Traditional
+        * "auto": Uses streaming by default (same as "true")
+
+    Returns (stream=false):
+        {
+          "answer": "Apple's revenue was $391.04 billion...",
+          "retrieved_chunks": [...],
+          "citations": [...],
+          "metadata": [...]
+        }
+
+    Returns (stream=true):
+        Server-Sent Events stream of tokens:
+        data: {"token": "Apple's"}
+        data: {"token": " revenue"}
+        ...
+        data: {"done": true, "citations": [...]}
+
+    HTTP Status: 200 OK
+    """
+    _ = (request, _key)
+
+    # Normalize stream parameter
+    if stream.lower() in ["true", "auto", "1", "yes"]:
+        use_stream = True
+    elif stream.lower() in ["false", "0", "no"]:
+        use_stream = False
+    else:
+        raise HTTPException(status_code=400, detail="stream must be 'true', 'false', or 'auto'")
+
+    # Check if grounded generation is available
+    try:
+        grounded_available = is_grounded_generation_available()
+    except:
+        grounded_available = False
+
+    # Retrieve documents
     try:
         results, _ = retrieve_documents(
             query_request.question,
@@ -334,9 +483,43 @@ async def query_documents(
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    query_response = _build_query_response(query_request, results, openai_enabled=openai_enabled)
-    get_cache_manager().set(cache_key, query_response.model_dump(mode="json"), ttl=CACHE_TTL_SECONDS)
-    return query_response
+    if not results:
+        raise HTTPException(status_code=404, detail="No relevant information was found")
+
+    # DIRECT RESPONSE MODE (stream=false)
+    if not use_stream:
+        query_response = _build_query_response(query_request, results, grounded_enabled=grounded_available)
+        return JSONResponse(
+            status_code=200,
+            content=query_response.model_dump(mode="json")
+        )
+
+    # STREAMING MODE (stream=true)
+    citations = _build_citations(results)
+    context = _build_context(results)
+
+    def event_generator():
+        answer_tokens = []
+        try:
+            for token in generate_answer_grounded_stream(query_request.question, context):
+                answer_tokens.append(token)
+                yield f"data: {_json.dumps({'token': token})}\n\n"
+        except Exception as exc:
+            logger.error("Streaming generation failed: %s", exc)
+            yield f"data: {_json.dumps({'error': str(exc)})}\n\n"
+            return
+
+        answer = "".join(answer_tokens)
+        full_response = QueryResponse(
+            answer=answer,
+            retrieved_chunks=[result.get("text", "") for result in results],
+            metadata=results,
+            citations=citations,
+        )
+
+        yield f"data: {_json.dumps({'done': True, 'citations': [c.model_dump() for c in citations]})}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 def _query_filters(query_request: QueryRequest) -> dict[str, str | None]:
@@ -354,17 +537,17 @@ def _build_query_response(
     query_request: QueryRequest,
     results: list[dict[str, Any]],
     *,
-    openai_enabled: bool,
+    grounded_enabled: bool,
 ) -> QueryResponse:
     """Build the structured query response from retrieval results."""
     answer = "No relevant information was found."
     if results:
         answer = "Relevant financial passages were retrieved."
-        if openai_enabled:
+        if grounded_enabled:
             context = _build_context(results)
             try:
-                answer = generate_openai_answer(query_request.question, context)
-            except (ValueError, OpenAIError, KeyError, IndexError) as exc:
+                answer = generate_answer_grounded(query_request.question, context)
+            except (ValueError, KeyError, IndexError, Exception) as exc:
                 logger.error("Grounded answer generation failed: %s", exc)
                 raise HTTPException(status_code=502, detail="Answer generation failed") from exc
 
@@ -407,79 +590,6 @@ def _build_context(results: list[dict[str, Any]]) -> str:
     )
 
 
-@app.post("/query/stream")
-@limiter.limit(RATE_LIMIT_QUERY)
-async def query_documents_stream(
-    request: Request,
-    response: Response,
-    query_request: QueryRequest,
-    _key: APIKeyRecord | None = Depends(require_api_key),
-) -> StreamingResponse:
-    """Stream an answer as Server-Sent Events (SSE).
-
-    Retrieval + reranking happen synchronously before the stream starts.
-    Only the LLM generation phase streams token-by-token.
-    """
-    _ = (request, _key)
-    if not is_openai_configured():
-        raise HTTPException(
-            status_code=400,
-            detail="Streaming requires OPENAI_API_KEY to be configured",
-        )
-
-    cache_key = _query_cache_key("query_stream", query_request, openai_enabled=True)
-    cached_response = _cache_lookup(cache_key, "query_stream")
-    if cached_response is not None:
-        # For stream cache, we store the full finished response
-        response.headers["X-Cache"] = "HIT"
-        return StreamingResponse(
-            iter([f"data: {_json.dumps({'cached': True, 'answer': cached_response.answer, 'citations': [c.model_dump() for c in cached_response.citations]})}\n\n"]),
-            media_type="text/event-stream",
-            headers={"X-Cache": "HIT"}
-        )
-
-    response.headers["X-Cache"] = "MISS"
-    try:
-        results, _ = retrieve_documents(
-            query_request.question,
-            top_k=query_request.top_k,
-            filters=_query_filters(query_request),
-        )
-    except (FileNotFoundError, ValueError) as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-
-    if not results:
-        raise HTTPException(status_code=404, detail="No relevant information was found")
-
-    context = _build_context(results)
-    citations = _build_citations(results)
-
-    # To cache the final result, we collect the stream manually
-    def event_generator():
-        answer_tokens = []
-        try:
-            for token in generate_openai_answer_stream(query_request.question, context):
-                answer_tokens.append(token)
-                yield f"data: {_json.dumps({'token': token})}\n\n"
-        except (ValueError, OpenAIError) as exc:
-            logger.error("Streaming generation failed: %s", exc)
-            yield f"data: {_json.dumps({'error': str(exc)})}\n\n"
-            return
-
-        answer = "".join(answer_tokens)
-
-        # Save to cache
-        full_response = QueryResponse(
-            answer=answer,
-            retrieved_chunks=[result.get("text", "") for result in results],
-            metadata=results,
-            citations=citations,
-        )
-        get_cache_manager().set(cache_key, full_response.model_dump(mode="json"), ttl=CACHE_TTL_SECONDS)
-
-        yield f"data: {_json.dumps({'done': True, 'citations': [c.model_dump() for c in citations]})}\n\n"
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream", headers={"X-Cache": "MISS"})
 
 
 # ---------------------------------------------------------------------------
@@ -488,6 +598,7 @@ async def query_documents_stream(
 
 @app.post("/admin/keys", response_model=APIKeyResponse)
 async def create_key(
+    request: Request,
     key_request: APIKeyCreate,
     _admin: APIKeyRecord = Depends(require_admin)
 ) -> APIKeyResponse:
@@ -498,6 +609,7 @@ async def create_key(
 
 @app.get("/admin/keys", response_model=list[APIKeyInfo])
 async def list_keys(
+    request: Request,
     _admin: APIKeyRecord = Depends(require_admin)
 ) -> list[APIKeyInfo]:
     """List all API keys. Requires admin privileges."""
@@ -507,6 +619,7 @@ async def list_keys(
 
 @app.delete("/admin/keys/{key_id}")
 async def delete_key(
+    request: Request,
     key_id: str,
     _admin: APIKeyRecord = Depends(require_admin)
 ) -> dict[str, str]:
