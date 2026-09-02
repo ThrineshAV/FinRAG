@@ -22,9 +22,13 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
-from src.auth.api_keys import create_api_key, list_api_keys, revoke_api_key
+from src.auth.api_keys import create_api_key, list_api_keys, revoke_api_key, validate_key
 from src.auth.dependencies import require_admin, require_api_key, require_upload
 from src.auth.models import APIKeyCreate, APIKeyInfo, APIKeyRecord, APIKeyResponse
+from src.auth import database as auth_db
+from src.auth import jwt_utils
+from src.auth import refresh as refresh_tokens
+from passlib.hash import bcrypt
 from src.cache.manager import build_cache_key, get_cache_manager
 from src.embeddings.embedder import generate_embeddings, store_embeddings
 from src.embeddings.embedder import load_vector_store
@@ -59,6 +63,12 @@ app.add_middleware(
     allow_methods=["*"],  # Allow all HTTP methods (GET, POST, DELETE, etc.)
     allow_headers=["*"],  # Allow all headers (including X-API-Key)
 )
+
+# Seed admin from env on startup
+try:
+    auth_db.seed_admin_from_env()
+except Exception as exc:
+    logger.warning("Failed to seed admin from env: %s", exc)
 
 # Custom OpenAPI with security scheme
 def custom_openapi():
@@ -217,6 +227,92 @@ def _cache_lookup(cache_key: str, namespace: str) -> QueryResponse | None:
     else:
         _query_cache_stats[f"{stat_prefix}_hits"] += 1
     return cached
+
+
+class AuthSignupRequest(BaseModel):
+    email: str
+    password: str = Field(min_length=8)
+    role: str = "reader"
+
+
+class AuthLoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+@app.post("/auth/signup")
+async def auth_signup(req: AuthSignupRequest):
+    """Create a new user account with bcrypt-hashed password."""
+    user = auth_db.get_user_by_email(req.email)
+    if user:
+        raise HTTPException(status_code=409, detail="Email already registered.")
+    user_id = auth_db.create_user(req.email, req.password, req.role)
+    return {"user_id": user_id, "email": req.email, "role": req.role}
+
+
+@app.post("/auth/login")
+async def auth_login(req: AuthLoginRequest, response: Response):
+    """Authenticate and return JWT + refresh cookie."""
+    user = auth_db.get_user_by_email(req.email)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid credentials.")
+    from passlib.hash import bcrypt
+    if not bcrypt.verify(req.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid credentials.")
+    token = jwt_utils.create_access_token(user["id"], user["email"], user["role"])
+    refresh_token = refresh_tokens.create_refresh_token(user["id"])
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        httponly=True,
+        samesite="Lax",
+        secure=os.getenv("JWT_COOKIE_SECURE", "false").lower() == "true",
+        max_age=60 * 60 * 24 * 7,
+    )
+    return {"access_token": token, "token_type": "bearer", "email": user["email"], "role": user["role"]}
+
+
+@app.post("/auth/refresh")
+async def auth_refresh(request: Request, response: Response):
+    """Rotate access token using the httpOnly refresh cookie."""
+    refresh_cookie = request.cookies.get("refresh_token")
+    user_id = refresh_tokens.verify_refresh_token(refresh_cookie)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid or expired refresh token.")
+    conn = auth_db._connect()
+    user = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    conn.close()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+    token = jwt_utils.create_access_token(user["id"], user["email"], user["role"])
+    return {"access_token": token, "token_type": "bearer"}
+
+
+@app.post("/auth/logout")
+async def auth_logout(request: Request, response: Response):
+    """Revoke refresh token and clear cookie."""
+    refresh_cookie = request.cookies.get("refresh_token")
+    if refresh_cookie:
+        refresh_tokens.revoke_refresh_token(refresh_cookie)
+    response.delete_cookie("refresh_token")
+    return {"detail": "Logged out."}
+
+
+@app.get("/auth/me")
+async def auth_me(request: Request):
+    """Return current user info from JWT or API key."""
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        claims = jwt_utils.verify_access_token(auth_header.split(" ", 1)[1])
+        if claims:
+            return {"user_id": claims["sub"], "email": claims.get("email"), "role": claims.get("role")}
+    # Fallback: try X-API-Key for service accounts
+    raw_key = request.headers.get("X-API-Key")
+    if raw_key:
+        record = validate_key(raw_key)
+        if record:
+            return {"key_id": record.key_id, "name": record.name, "role": record.role.value}
+    raise HTTPException(status_code=401, detail="Not authenticated.")
 
 
 class UploadResponse(BaseModel):

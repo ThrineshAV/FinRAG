@@ -100,3 +100,9 @@ pytest-cov
 # ==============================================================================
 safety
 bandit[toml]
+passlib>=1.7.4
+bcrypt>=4.0,<5.0
+python-jose[cryptography]>=3.3.0
+itsdangerous>=2.2.0
+sqlalchemy>=2.0.0
+pydantic[email]>=2.0.0
