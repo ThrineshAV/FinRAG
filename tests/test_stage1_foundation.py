@@ -121,38 +121,41 @@ def test_company_filter_accepts_common_legal_name_variant() -> None:
     assert _matches_filter({"company": "Apple Inc."}, "company", "Apple")
 
 
-def test_openai_generation_uses_grounded_context(monkeypatch) -> None:
+def test_gemini_generation_uses_grounded_context(monkeypatch) -> None:
     from unittest.mock import MagicMock
 
     captured: dict = {}
 
-    class FakeMessage:
-        content = "Apple reported $10."
+    class FakeResponse:
+        text = "Apple reported $10."
 
-    class FakeChoice:
-        message = FakeMessage()
+    def fake_generate(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return FakeResponse()
 
-    class FakeCompletion:
-        choices = [FakeChoice()]
+    model_instance = MagicMock()
+    model_instance.generate_content.side_effect = fake_generate
 
-    def fake_create(**kwargs):
-        captured.update(kwargs)
-        return FakeCompletion()
+    def fake_get_client():
+        return model_instance
 
-    fake_client = MagicMock()
-    fake_client.chat.completions.create.side_effect = fake_create
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(llm, "_get_gemini_client", fake_get_client)
 
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setattr(llm, "_get_openai_client", lambda: fake_client)
-
-    answer = llm.generate_openai_answer(
+    answer = llm.generate_answer_grounded(
         "What was Apple's net income?",
         "Source: apple-2024; Page: 4\nNet income was $10.",
     )
 
     assert answer == "Apple reported $10."
-    assert captured["messages"][1]["content"].startswith("SOURCES:")
-    assert "Net income was $10." in captured["messages"][1]["content"]
+
+    # The context (sources) must be passed through to the Gemini SDK
+    # so the model only sees grounded sources.
+    parts_blob = str(captured["args"])
+    assert "Source: apple-2024" in parts_blob
+    assert "Net income was $10." in parts_blob
+    assert "What was Apple's net income?" in parts_blob
 
 
 def test_retrieval_metrics_calculate_hit_rate_and_mrr() -> None:

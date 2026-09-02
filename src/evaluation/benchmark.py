@@ -25,7 +25,7 @@ def load_cases(path: Path = BENCHMARK_PATH) -> list[EvaluationCase]:
 
 def _run_with_generation(cases: list[EvaluationCase]) -> dict:
     """Run retrieval + generation benchmark with answer quality scoring."""
-    from src.generation.llm import generate_openai_answer
+    from src.generation.llm import generate_answer_grounded
     from src.retrieval.retriever import retrieve_documents
 
     retrieval_metrics = evaluate_retrieval(cases, retrieve_for_evaluation)
@@ -40,7 +40,7 @@ def _run_with_generation(cases: list[EvaluationCase]) -> dict:
             f"Page: {r.get('page_number', 'unknown')}\n{r.get('text', '')}"
             for r in results
         )
-        answer = generate_openai_answer(case["question"], context)
+        answer = generate_answer_grounded(case["question"], context)
         quality = evaluate_answer_quality(case["question"], answer, context)
         faithfulness_total += quality["faithfulness"]
         relevance_total += quality["relevance"]
@@ -56,7 +56,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--include-generation",
         action="store_true",
-        help="Also run generation and report answer quality metrics (requires OPENAI_API_KEY)",
+        help="Also run generation and report answer quality metrics (requires GEMINI_API_KEY)",
     )
     args = parser.parse_args()
 

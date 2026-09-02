@@ -16,78 +16,66 @@ os.environ["AUTH_REQUIRED"] = "false"
 
 
 # ============================================================
-# 1. OpenAI SDK sends a grounded prompt
+# 1. Gemini SDK sends a grounded prompt
 # ============================================================
 
-def test_openai_sdk_sends_grounded_prompt(monkeypatch) -> None:
-    """generate_openai_answer() should use the OpenAI SDK and embed the
+def test_gemini_sdk_sends_grounded_prompt(monkeypatch) -> None:
+    """generate_answer_grounded() should use the Gemini SDK and embed the
     context into the user message so the model only sees grounded sources."""
-    captured: dict = {}
 
-    class FakeMessage:
-        content = "Revenue was $50 billion."
+    class FakePart:
+        def __init__(self, text):
+            self.text = text
 
-    class FakeChoice:
-        message = FakeMessage()
+    class FakeResponse:
+        text = "Revenue was $50 billion."
 
-    class FakeCompletion:
-        choices = [FakeChoice()]
+    model_instance = MagicMock()
+    model_instance.generate_content.return_value = FakeResponse()
 
-    def fake_create(**kwargs):
-        captured.update(kwargs)
-        return FakeCompletion()
+    def fake_get_client():
+        return model_instance
 
-    fake_client = MagicMock()
-    fake_client.chat.completions.create.side_effect = fake_create
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(llm, "_get_gemini_client", fake_get_client)
 
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setattr(llm, "_get_openai_client", lambda: fake_client)
-
-    answer = llm.generate_openai_answer(
+    answer = llm.generate_answer_grounded(
         "What was Apple's revenue?",
         "Source: apple-2024; Page: 5\nRevenue was $50 billion.",
     )
 
     assert answer == "Revenue was $50 billion."
-    assert captured["messages"][0]["role"] == "system"
-    assert "financial research assistant" in captured["messages"][0]["content"].lower()
-    assert captured["messages"][1]["content"].startswith("SOURCES:")
-    assert "Revenue was $50 billion." in captured["messages"][1]["content"]
-    assert captured["model"] == "gpt-4o-mini"
+    # Verify Gemini was called with content parts
+    call_args = model_instance.generate_content.call_args
+    parts = call_args[0][0]  # first positional arg is the content list
+    assert len(parts) == 1
+    assert "financial research assistant" in parts[0]["parts"][0].lower()
+    assert "Revenue was $50 billion." in parts[0]["parts"][1]
 
 
 # ============================================================
 # 2. Streaming yields token deltas
 # ============================================================
 
-def test_openai_stream_yields_token_deltas(monkeypatch) -> None:
-    """generate_openai_answer_stream() should yield individual tokens."""
+def test_gemini_stream_yields_token_deltas(monkeypatch) -> None:
+    """generate_answer_grounded_stream() should yield individual tokens."""
 
-    class FakeDelta:
-        def __init__(self, content):
-            self.content = content
+    class FakeChunk:
+        def __init__(self, text):
+            self.text = text
 
-    class FakeStreamChoice:
-        def __init__(self, content):
-            self.delta = FakeDelta(content)
+    chunks = [FakeChunk("Hello"), FakeChunk(" world"), FakeChunk("!")]
 
-    class FakeStreamChunk:
-        def __init__(self, content):
-            self.choices = [FakeStreamChoice(content)]
+    model_instance = MagicMock()
+    model_instance.generate_content.return_value = iter(chunks)
 
-    chunks = [FakeStreamChunk("Hello"), FakeStreamChunk(" world"), FakeStreamChunk("!")]
+    def fake_get_client():
+        return model_instance
 
-    def fake_create(**kwargs):
-        assert kwargs.get("stream") is True
-        return iter(chunks)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(llm, "_get_gemini_client", fake_get_client)
 
-    fake_client = MagicMock()
-    fake_client.chat.completions.create.side_effect = fake_create
-
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setattr(llm, "_get_openai_client", lambda: fake_client)
-
-    collected = list(llm.generate_openai_answer_stream(
+    collected = list(llm.generate_answer_grounded_stream(
         "What was revenue?", "Revenue was $10."
     ))
 
@@ -116,14 +104,14 @@ def test_stream_endpoint_returns_sse_events(monkeypatch) -> None:
             {},
         ),
     )
-    monkeypatch.setattr(api, "is_openai_configured", lambda: True)
+    monkeypatch.setattr(api, "is_grounded_generation_available", lambda: True)
 
     def fake_stream(question, context):
         yield "Revenue"
         yield " was"
         yield " $50B."
 
-    monkeypatch.setattr(api, "generate_openai_answer_stream", fake_stream)
+    monkeypatch.setattr(api, "generate_answer_grounded_stream", fake_stream)
 
     client = TestClient(api.app)
     response = client.post(

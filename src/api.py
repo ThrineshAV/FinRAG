@@ -186,15 +186,14 @@ class CacheStats(BaseModel):
     hit_rate: float
 
 
-def _query_cache_key(namespace: str, query_request: QueryRequest, *, openai_enabled: bool) -> str:
+def _query_cache_key(namespace: str, query_request: QueryRequest, *, grounded_enabled: bool) -> str:
     """Build a cache key from the question, filters, and answer mode."""
     payload = {
         "request": query_request.model_dump(mode="json"),
-        "openai_enabled": openai_enabled,
-        "openai_model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+        "grounded_enabled": grounded_enabled,
+        "gemini_model": os.getenv("GEMINI_MODEL", "gemini-3.6-flash"),
     }
     return build_cache_key(namespace, payload)
-
 
 
 
@@ -250,7 +249,8 @@ async def readiness() -> dict[str, str]:
 async def upload_pdf(
     request: Request,
     background_tasks: BackgroundTasks,
-    files: list[UploadFile] = File(..., description="Multiple PDF files to upload"),
+    file: UploadFile | None = File(None, description="Single PDF file to upload"),
+    files: list[UploadFile] | None = File(None, description="Multiple PDF files to upload"),
     company: str = Form(...),
     document_type: str = Form(...),
     fiscal_year: str = Form(...),
@@ -258,72 +258,29 @@ async def upload_pdf(
     mode: str = Form("auto", description="Processing mode: 'auto', 'sync', or 'async'"),
     _key: APIKeyRecord | None = Depends(require_upload),
 ):
-    """Smart Upload: Extract, chunk, embed, and index financial PDFs.
-
-    Intelligently handles both single and multiple files with sync/async options.
-
-    Request body (multipart/form-data):
-    - files: Upload one or more PDF files
-    - company: Company name
-    - document_type: Document type (10-K, 10-Q, etc.)
-    - fiscal_year: Fiscal year (2024, etc.)
-    - quarter: Quarter (Q1, Q2, FY, etc.)
-    - mode: Processing mode (optional, default: "auto")
-      * "auto": 1 file = sync (201), 2+ files = async (202)
-      * "sync": Always synchronous, wait for all files (201)
-      * "async": Always asynchronous, queue for background (202)
-
-    Returns (Sync Mode - 201):
-        List of upload results with filename and chunks indexed for each file
-        [
-          {"filename": "doc.pdf", "chunks_indexed": 45, "metadata": {...}},
-          ...
-        ]
-
-    Returns (Async Mode - 202):
-        Job status with job_id for tracking
-        {"status": "accepted", "job_id": "uuid", "file_count": 3, "mode": "async"}
-
-    HTTP Status:
-    - 201 Created (sync mode: all files processed)
-    - 202 Accepted (async mode: files queued)
-
-    Example cURL (Auto mode):
-        curl -X POST http://127.0.0.1:8000/upload \\
-          -F "files=@file1.pdf" \\
-          -F "files=@file2.pdf" \\
-          -F "company=Apple" \\
-          -F "document_type=10-K" \\
-          -F "fiscal_year=2024" \\
-          -F "quarter=Q1" \\
-          -H "X-API-Key: your_key"
-
-    Example cURL (Force async):
-        curl -X POST http://127.0.0.1:8000/upload \\
-          -F "files=@large_file.pdf" \\
-          -F "mode=async" \\
-          -F "company=Apple" \\
-          -F "document_type=10-K" \\
-          -F "fiscal_year=2024" \\
-          -F "quarter=Q1" \\
-          -H "X-API-Key: your_key"
-    """
+    """Smart Upload: Extract, chunk, embed, and index financial PDFs."""
     _ = (request, _key)
 
-    if not files or len(files) == 0:
+    upload_files = [upload for upload in ([file] if file else []) + (files or []) if upload]
+    if not upload_files:
         raise HTTPException(status_code=400, detail="At least one PDF file is required")
 
-    # Validate all files are PDFs
-    for file in files:
-        if not file.filename or not file.filename.lower().endswith(".pdf"):
-            raise HTTPException(
-                status_code=400,
-                detail=f"File '{file.filename}' must be a PDF. Only PDF files are supported."
-            )
+    for upload in upload_files:
+        if not upload.filename or not upload.filename.lower().endswith(".pdf"):
+            raise HTTPException(status_code=400, detail="Only PDF files are supported")
 
-    # Determine processing mode
+    file_contents: list[tuple[UploadFile, bytes]] = []
+    for upload in upload_files:
+        content = await upload.read()
+        if len(content) > MAX_UPLOAD_SIZE:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"File '{upload.filename}' exceeds maximum upload size of {MAX_UPLOAD_SIZE // (1024 * 1024)} MB",
+            )
+        file_contents.append((upload, content))
+
     if mode == "auto":
-        use_async = len(files) > 1
+        use_async = len(file_contents) > 1
     elif mode == "async":
         use_async = True
     elif mode == "sync":
@@ -338,14 +295,13 @@ async def upload_pdf(
         "quarter": quarter,
     }
 
-    # ASYNC MODE: Queue for background processing
     if use_async:
         job_id = str(uuid4())
 
         async def _process_async():
-            for file in files:
+            for upload, content in file_contents:
                 async with ingestion_lock:
-                    await _process_single_file(file, metadata)
+                    await _process_single_file(upload, metadata, content)
 
         background_tasks.add_task(_process_async)
         return JSONResponse(
@@ -353,51 +309,47 @@ async def upload_pdf(
             content={
                 "status": "accepted",
                 "job_id": job_id,
-                "file_count": len(files),
+                "file_count": len(file_contents),
                 "mode": "async",
-                "message": f"Queued {len(files)} file(s) for background processing. Use job_id to track status."
-            }
+                "message": f"Queued {len(file_contents)} file(s) for background processing. Use job_id to track status.",
+            },
         )
 
-    # SYNC MODE: Process immediately and return results
     results: list[UploadResponse] = []
 
-    for file in files:
+    for upload, content in file_contents:
         temporary_path: Path | None = None
         try:
             with NamedTemporaryFile(delete=False, suffix=".pdf") as temporary_file:
-                temporary_file.write(await file.read())
+                temporary_file.write(content)
                 temporary_path = Path(temporary_file.name)
 
             pages = extract_pdf_pages(temporary_path)
-            chunks = create_page_chunks(pages, {**metadata, "document_id": Path(file.filename).stem})
+            chunks = create_page_chunks(pages, {**metadata, "document_id": Path(upload.filename).stem})
             embeddings = generate_embeddings(chunks)
             store_embeddings(chunks, embeddings)
 
             results.append(UploadResponse(
-                filename=file.filename,
+                filename=upload.filename,
                 chunks_indexed=len(chunks),
-                metadata={key: value for key, value in metadata.items() if key != "document_id"},
+                metadata=metadata.copy(),
             ))
         except (FileNotFoundError, ValueError) as exc:
-            logger.warning("PDF indexing failed for %s: %s", file.filename, exc)
+            logger.warning("PDF indexing failed for %s: %s", upload.filename, exc)
             raise HTTPException(
                 status_code=422,
-                detail=f"Failed to index '{file.filename}': {str(exc)}"
+                detail=f"Failed to index '{upload.filename}': {str(exc)}",
             ) from exc
         finally:
             if temporary_path and temporary_path.exists():
                 temporary_path.unlink(missing_ok=True)
 
-    # Clear cache after sync processing
     cache = get_cache_manager()
     cache.clear("finsight:query:")
     cache.clear("finsight:query_stream:")
 
-    return JSONResponse(
-        status_code=status.HTTP_201_CREATED,
-        content=[r.model_dump() for r in results]
-    )
+    content = results[0].model_dump() if len(results) == 1 else [r.model_dump() for r in results]
+    return JSONResponse(status_code=status.HTTP_201_CREATED, content=content)
 
 
 async def _process_single_file(file: UploadFile, metadata: dict[str, Any]) -> None:
@@ -494,7 +446,20 @@ async def query_documents(
             content=query_response.model_dump(mode="json")
         )
 
-    # STREAMING MODE (stream=true)
+    # STREAMING MODE (stream=True)
+    if not grounded_available:
+        # Fall back to evidence-only response when Gemini isn't configured
+        citations = _build_citations(results)
+        return JSONResponse(
+            content=QueryResponse(
+                answer="Relevant financial passages were retrieved.",
+                retrieved_chunks=[result.get("text", "") for result in results],
+                metadata=results,
+                citations=citations,
+            ).model_dump(mode="json"),
+            status_code=200,
+        )
+
     citations = _build_citations(results)
     context = _build_context(results)
 

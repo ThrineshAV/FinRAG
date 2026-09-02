@@ -17,13 +17,13 @@ def test_query_endpoint_cache_behaviour(monkeypatch) -> None:
     """Test that POST /query uses cache, updates headers, and tracks stats."""
     # Define mocks
     monkeypatch.setattr(api, "retrieve_documents", lambda question, top_k, filters: ([{"text": "mock chunk"}], {}))
-    monkeypatch.setattr(api, "_build_query_response", lambda qr, results, openai_enabled: api.QueryResponse(
+    monkeypatch.setattr(api, "_build_query_response", lambda qr, results, grounded_enabled: api.QueryResponse(
         answer="mock answer",
         retrieved_chunks=["mock chunk"],
         metadata=[{"text": "mock chunk"}],
         citations=[]
     ))
-    monkeypatch.setattr(api, "is_openai_configured", lambda: False)
+    monkeypatch.setattr(api, "is_grounded_generation_available", lambda: False)
 
     # Clear cache
     api.get_cache_manager().clear()
@@ -48,13 +48,13 @@ def test_query_stream_cache_behaviour(monkeypatch) -> None:
     """Test that POST /query/stream uses cache, updates headers, and tracks stats."""
     # Define mocks
     monkeypatch.setattr(api, "retrieve_documents", lambda question, top_k, filters: ([{"text": "mock chunk"}], {}))
-    monkeypatch.setattr(api, "is_openai_configured", lambda: True)
+    monkeypatch.setattr(api, "is_grounded_generation_available", lambda: True)
 
     # Mock LLM stream
     def fake_stream(question, context):
         yield "mock "
         yield "answer"
-    monkeypatch.setattr(api, "generate_openai_answer_stream", fake_stream)
+    monkeypatch.setattr(api, "generate_answer_grounded_stream", fake_stream)
 
     # Clear cache
     api.get_cache_manager().clear()

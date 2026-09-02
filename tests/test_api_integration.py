@@ -31,7 +31,7 @@ def test_ready_endpoint_returns_ready_when_store_loads(monkeypatch) -> None:
     assert response.json() == {"status": "ready"}
 
 
-def test_query_returns_retrieved_evidence_without_openai(monkeypatch) -> None:
+def test_query_returns_retrieved_evidence_without_grounding(monkeypatch) -> None:
     monkeypatch.setattr(
         api,
         "retrieve_documents",
@@ -46,7 +46,7 @@ def test_query_returns_retrieved_evidence_without_openai(monkeypatch) -> None:
             {},
         ),
     )
-    monkeypatch.setattr(api, "is_openai_configured", lambda: False)
+    monkeypatch.setattr(api, "is_grounded_generation_available", lambda: False)
 
     response = client.post("/query", json={"question": "What was net income?"})
 
@@ -123,8 +123,8 @@ def test_upload_then_query_returns_uploaded_content(tmp_path, monkeypatch) -> No
     fake_model = FakeEmbeddingModel()
     monkeypatch.setattr(embedder, "_embedding_model", fake_model)
 
-    # Disable OpenAI so the query returns evidence-only
-    monkeypatch.setattr(api, "is_openai_configured", lambda: False)
+    # Disable grounded generation so the query returns evidence-only
+    monkeypatch.setattr(api, "is_grounded_generation_available", lambda: False)
 
     # Disable reranking to avoid downloading the cross-encoder
     monkeypatch.setenv("ENABLE_RERANKING", "false")
