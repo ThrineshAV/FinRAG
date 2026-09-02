@@ -379,7 +379,7 @@ async def _process_single_file(file: UploadFile, metadata: dict[str, Any]) -> No
 async def query_documents(
     request: Request,
     query_request: QueryRequest,
-    stream: str = "true",
+    stream: str = "false",
     _key: APIKeyRecord | None = Depends(require_api_key),
 ):
     """Smart Query: Retrieve and optionally stream answer.
@@ -425,6 +425,8 @@ async def query_documents(
     except:
         grounded_available = False
 
+    cache_key = _query_cache_key("query", query_request, grounded_enabled=grounded_available)
+
     # Retrieve documents
     try:
         results, _ = retrieve_documents(
@@ -440,33 +442,50 @@ async def query_documents(
 
     # DIRECT RESPONSE MODE (stream=false)
     if not use_stream:
+        cached = _cache_lookup(cache_key, "query")
+        if cached is not None:
+            return JSONResponse(
+                status_code=200,
+                content=cached.model_dump(mode="json"),
+                headers={"X-Cache": "HIT"},
+            )
+
         query_response = _build_query_response(query_request, results, grounded_enabled=grounded_available)
+        get_cache_manager().set(cache_key, query_response.model_dump(mode="json"), ttl=CACHE_TTL_SECONDS)
         return JSONResponse(
             status_code=200,
-            content=query_response.model_dump(mode="json")
+            content=query_response.model_dump(mode="json"),
+            headers={"X-Cache": "MISS"},
         )
 
     # STREAMING MODE (stream=True)
+    cached = _cache_lookup(cache_key, "query")
+    if cached is not None:
+        def cached_stream():
+            yield f"data: {_json.dumps({'cached': True, 'response': cached.model_dump(mode='json')})}\n\n"
+        return StreamingResponse(cached_stream(), media_type="text/event-stream", headers={"X-Cache": "HIT"})
+
     if not grounded_available:
         # Fall back to evidence-only response when Gemini isn't configured
         citations = _build_citations(results)
-        return JSONResponse(
-            content=QueryResponse(
-                answer="Relevant financial passages were retrieved.",
-                retrieved_chunks=[result.get("text", "") for result in results],
-                metadata=results,
-                citations=citations,
-            ).model_dump(mode="json"),
-            status_code=200,
+        query_response = QueryResponse(
+            answer="Relevant financial passages were retrieved.",
+            retrieved_chunks=[result.get("text", "") for result in results],
+            metadata=results,
+            citations=citations,
         )
+        get_cache_manager().set(cache_key, query_response.model_dump(mode="json"), ttl=CACHE_TTL_SECONDS)
 
-    citations = _build_citations(results)
-    context = _build_context(results)
+        def fallback_stream():
+            yield f"data: {_json.dumps({'token': query_response.answer})}\n\n"
+            yield f"data: {_json.dumps({'done': True, 'citations': [c.model_dump() for c in citations]})}\n\n"
+
+        return StreamingResponse(fallback_stream(), media_type="text/event-stream", headers={"X-Cache": "MISS"})
 
     def event_generator():
         answer_tokens = []
         try:
-            for token in generate_answer_grounded_stream(query_request.question, context):
+            for token in generate_answer_grounded_stream(query_request.question, _build_context(results)):
                 answer_tokens.append(token)
                 yield f"data: {_json.dumps({'token': token})}\n\n"
         except Exception as exc:
@@ -479,12 +498,104 @@ async def query_documents(
             answer=answer,
             retrieved_chunks=[result.get("text", "") for result in results],
             metadata=results,
+            citations=_build_citations(results),
+        )
+        get_cache_manager().set(cache_key, full_response.model_dump(mode="json"), ttl=CACHE_TTL_SECONDS)
+        yield f"data: {_json.dumps({'done': True, 'citations': [c.model_dump() for c in _build_citations(results)]})}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream", headers={"X-Cache": "MISS"})
+
+
+@app.post("/query/stream")
+@limiter.limit(RATE_LIMIT_QUERY)
+async def query_stream(
+    request: Request,
+    query_request: QueryRequest,
+    _key: APIKeyRecord | None = Depends(require_api_key),
+):
+    """Streaming-only query endpoint with full cache support.
+
+    Always returns an SSE stream. On cache HIT, returns the cached response
+    wrapped in a ``{"cached": true, "response": {...}}`` SSE event.
+    On cache MISS, streams tokens from the LLM and caches the result.
+    """
+    _ = (request, _key)
+
+    try:
+        grounded_available = is_grounded_generation_available()
+    except Exception:
+        grounded_available = False
+
+    cache_key = _query_cache_key("query_stream", query_request, grounded_enabled=grounded_available)
+
+    cached = _cache_lookup(cache_key, "query_stream")
+    if cached is not None:
+        def cached_stream():
+            yield f"data: {_json.dumps({'cached': True, 'response': cached.model_dump(mode='json')})}\n\n"
+
+        return StreamingResponse(cached_stream(), media_type="text/event-stream", headers={"X-Cache": "HIT"})
+
+    try:
+        results, _ = retrieve_documents(
+            query_request.question,
+            top_k=query_request.top_k,
+            filters=_query_filters(query_request),
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    if not results:
+        raise HTTPException(status_code=404, detail="No relevant information was found")
+
+    citations = _build_citations(results)
+    context = _build_context(results)
+
+    def event_generator():
+        answer_tokens = []
+        try:
+            if grounded_available:
+                for token in generate_answer_grounded_stream(query_request.question, context):
+                    answer_tokens.append(token)
+                    yield f"data: {_json.dumps({'token': token})}\n\n"
+            else:
+                answer = "Relevant financial passages were retrieved."
+                answer_tokens.append(answer)
+                yield f"data: {_json.dumps({'token': answer})}\n\n"
+        except Exception as exc:
+            logger.error("Streaming generation failed: %s", exc)
+            yield f"data: {_json.dumps({'error': str(exc)})}\n\n"
+            return
+
+        answer = "".join(answer_tokens)
+        full_response = QueryResponse(
+            answer=answer,
+            retrieved_chunks=[result.get("text", "") for result in results],
+            metadata=results,
             citations=citations,
         )
-
+        get_cache_manager().set(cache_key, full_response.model_dump(mode="json"), ttl=CACHE_TTL_SECONDS)
         yield f"data: {_json.dumps({'done': True, 'citations': [c.model_dump() for c in citations]})}\n\n"
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(event_generator(), media_type="text/event-stream", headers={"X-Cache": "MISS"})
+
+
+@app.get("/cache/stats", response_model=CacheStats)
+async def cache_stats(_key: APIKeyRecord | None = Depends(require_api_key)):
+    """Return current cache hit/miss counters and backend info."""
+    stats = _query_cache_stats
+    total_hits = stats["query_hits"] + stats["stream_hits"]
+    total_misses = stats["query_misses"] + stats["stream_misses"]
+    total = total_hits + total_misses
+    return CacheStats(
+        backend=get_cache_manager().backend,
+        query_hits=stats["query_hits"],
+        query_misses=stats["query_misses"],
+        stream_hits=stats["stream_hits"],
+        stream_misses=stats["stream_misses"],
+        total_hits=total_hits,
+        total_misses=total_misses,
+        hit_rate=total_hits / total if total > 0 else 0.0,
+    )
 
 
 def _query_filters(query_request: QueryRequest) -> dict[str, str | None]:
