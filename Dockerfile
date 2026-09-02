@@ -6,8 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     ENABLE_RERANKING=false \
     RATE_LIMIT_QUERY=20/minute \
     RATE_LIMIT_UPLOAD=5/minute \
-    MAX_UPLOAD_SIZE_MB=25 \
-    AUTH_REQUIRED=true
+    MAX_UPLOAD_SIZE_MB=25
 
 WORKDIR /app
 
@@ -16,7 +15,7 @@ RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/wh
     && pip install --no-cache-dir -r requirements.txt
 
 COPY src ./src
-COPY data/evaluation.json ./data/evaluation.json
+COPY data ./data
 
 EXPOSE 8000
 
