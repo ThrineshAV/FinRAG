@@ -269,7 +269,7 @@ async def auth_login(req: AuthLoginRequest, response: Response):
         secure=os.getenv("JWT_COOKIE_SECURE", "false").lower() == "true",
         max_age=60 * 60 * 24 * 7,
     )
-    return {"access_token": token, "token_type": "bearer", "email": user["email"], "role": user["role"]}
+    return {"access_token": token, "token_type": "bearer", "email": user["email"], "role": user["role"]}  # nosec B105 - OAuth2 token type, not a password
 
 
 @app.post("/auth/refresh")
@@ -285,7 +285,7 @@ async def auth_refresh(request: Request, response: Response):
     if not user:
         raise HTTPException(status_code=404, detail="User not found.")
     token = jwt_utils.create_access_token(user["id"], user["email"], user["role"])
-    return {"access_token": token, "token_type": "bearer"}
+    return {"access_token": token, "token_type": "bearer"}  # nosec B105 - OAuth2 token type, not a password
 
 
 @app.post("/auth/logout")
