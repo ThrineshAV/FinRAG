@@ -153,3 +153,4 @@ qdrant_storage/
 data/evaluation.json
 data/api_keys.json
 data/evaluation.json
+data/auth_users.db

@@ -30,8 +30,9 @@ Stages 1–6 are complete:
 - API responses include request IDs and processing-time headers
 - Robust error handling for SEC ingestion and HTML parsing
 - Docker deployment configuration with configurable limits
-- API key authentication via `X-API-Key` header
-- Role-based access control (reader, admin)
+- JWT-based user authentication with email/password and httpOnly refresh cookies
+- API key authentication via `X-API-Key` header (for service accounts)
+- Role-based access control (reader, uploader, admin)
 - Admin endpoints for API key management
 - GitHub Actions CI/CD pipeline with automated testing
 - Docker image building and publishing to GitHub Container Registry
@@ -178,38 +179,98 @@ http://127.0.0.1:8000/docs
 
 ## Authentication
 
-The API uses API key authentication via the `X-API-Key` header. Authentication is enabled by default.
+The API supports two authentication methods:
 
-### Generate an Admin Key
+1. **JWT + Password** — Recommended for end users. Uses email/password signup and login, returns an access token (15-min JWT) and an httpOnly refresh cookie (7-day).
+2. **X-API-Key** — For service accounts and scripts. Longer-lived static keys.
 
-```powershell
-python -m src.auth.api_keys
-```
+Both methods are accepted on all protected endpoints.
 
-This prints a new admin key. Copy it — it's shown only once.
+### Environment Variables
 
-Alternatively, set `ADMIN_API_KEY` in your environment:
+| Variable | Default | Description |
+|---|---|---|
+| `AUTH_REQUIRED` | `true` | Enable/disable auth (set `false` for local dev) |
+| `JWT_SECRET` | *(required)* | Secret key for signing JWTs. Generate with `openssl rand -hex 32` |
+| `JWT_COOKIE_SECURE` | `false` | Set `true` in production (requires HTTPS) |
+| `ADMIN_EMAIL` | *(optional)* | Email for the auto-seeded admin account |
+| `ADMIN_PASSWORD` | *(optional)* | Password for the auto-seeded admin account |
 
-```powershell
-$env:ADMIN_API_KEY="fsr_your_key_here"
-python -m src.auth.api_keys
-```
+> **Important:** Set `JWT_SECRET` before running. If not set, the app logs a warning and falls back to an in-memory secret (tokens invalidate on restart).
 
-### Create Additional Keys
-
-Use the admin key to create reader or admin keys via the API:
+### Sign Up
 
 ```bash
-curl -X POST http://127.0.0.1:8000/admin/keys \
-  -H "X-API-Key: YOUR_ADMIN_KEY" \
+curl -X POST http://127.0.0.1:8000/auth/signup \
   -H "Content-Type: application/json" \
-  -d '{"name": "data-science-team", "role": "reader"}'
+  -d '{"email": "alice@example.com", "password": "SecurePass123", "role": "reader"}'
+```
+
+Accepted roles: `reader` (query only), `uploader` (query + upload), `admin` (full access).
+
+### Login
+
+```bash
+curl -X POST http://127.0.0.1:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -c cookies.txt \
+  -d '{"email": "alice@example.com", "password": "SecurePass123"}'
+```
+
+Returns a JSON body with `access_token` and sets an httpOnly `refresh_token` cookie.
+
+### Using the Access Token
+
+Pass the access token as a Bearer token:
+
+```bash
+curl -X POST http://127.0.0.1:8000/query \
+  -H "Authorization: Bearer eyJhbGci..." \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What was Apple's revenue in 2025?"}'
+```
+
+### Refreshing the Access Token
+
+Call `/auth/refresh` — it reads the httpOnly cookie automatically and returns a new access token:
+
+```bash
+curl -X POST http://127.0.0.1:8000/auth/refresh \
+  -b cookies.txt -c cookies.txt
+```
+
+### Logout
+
+```bash
+curl -X POST http://127.0.0.1:8000/auth/logout -b cookies.txt
+```
+
+Revokes the refresh token and clears the cookie.
+
+### Service Account API Keys (X-API-Key)
+
+For automated scripts, create a static API key via the admin panel or using the CLI:
+
+```powershell
+python -m src.auth.api_keys
+```
+
+Then use it as:
+
+```bash
+curl -X POST http://127.0.0.1:8000/query \
+  -H "X-API-Key: fsr_your_key_here" \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What was revenue?"}'
 ```
 
 ### Roles
 
-- **`reader`** — Can query documents via `/query` and `/query/stream`
-- **`admin`** — Can query, upload documents, and manage API keys
+| Role | Query | Upload | Admin Keys |
+|---|---|---|---|
+| `reader` | ✅ | ❌ | ❌ |
+| `uploader` | ✅ | ✅ | ❌ |
+| `admin` | ✅ | ✅ | ✅ |
 
 ### Disable Authentication (Local Development)
 
@@ -218,7 +279,7 @@ $env:AUTH_REQUIRED="false"
 uvicorn src.api:app --reload
 ```
 
-**Note:** Admin endpoints always require authentication, even when `AUTH_REQUIRED=false`.
+> **Note:** Admin endpoints (`/admin/*`) always require authentication, even when `AUTH_REQUIRED=false`.
 
 ### Available Endpoints
 
