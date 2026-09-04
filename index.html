@@ -556,16 +556,6 @@
                     <pre id="smartQueryResponseText"></pre>
                 </div>
             </div>
-
-            <!-- Debug Info -->
-            <div class="section">
-                <h2>🔍 Debug</h2>
-                <div style="background: #f0f4ff; padding: 10px; border-radius: 5px; margin-bottom: 15px; font-size: 12px;">
-                    <strong>Config:</strong><br>
-                    API URL: <span id="debugUrl" style="color: #667eea;">-</span><br>
-                    <button type="button" onclick="debugCheck()" style="margin-top: 8px; padding: 6px 12px; font-size: 11px;">🔍 Check Config</button>
-                </div>
-            </div>
         </div>
     </div>
 
@@ -1004,15 +994,6 @@
             return queryDocuments();
         }
 
-        function debugCheck() {
-            const url = getApiUrl();
-            document.getElementById('debugUrl').textContent = url || '❌ EMPTY';
-            if (!url) {
-                alert('❌ Configuration incomplete! Set API URL.');
-            } else {
-                alert('✅ Config OK\nURL: ' + url);
-            }
-        }
     </script>
 </body>
 </html>

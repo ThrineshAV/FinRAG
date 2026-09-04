@@ -347,8 +347,6 @@ async def upload_pdf(
     _claims: dict | None = Depends(require_upload),
 ):
     """Smart Upload: Extract, chunk, embed, and index financial PDFs."""
-    _ = (request, _key)
-
     upload_files = [upload for upload in ([file] if file else []) + (files or []) if upload]
     if not upload_files:
         raise HTTPException(status_code=400, detail="At least one PDF file is required")
@@ -497,7 +495,6 @@ async def query_documents(
 
     HTTP Status: 200 OK
     """
-    _ = (request, _key)
 
     # Normalize stream parameter
     if stream.lower() in ["true", "auto", "1", "yes"]:
@@ -607,7 +604,6 @@ async def query_stream(
     wrapped in a ``{"cached": true, "response": {...}}`` SSE event.
     On cache MISS, streams tokens from the LLM and caches the result.
     """
-    _ = (request, _key)
 
     try:
         grounded_available = is_grounded_generation_available()
