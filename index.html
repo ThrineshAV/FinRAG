@@ -393,9 +393,58 @@
                     <label for="apiUrl">API URL:</label>
                     <input type="text" id="apiUrl" value="http://127.0.0.1:8000" />
                 </div>
-                <div class="form-group">
-                    <label for="apiKey">API Key:</label>
-                    <input type="text" id="apiKey" placeholder="fsr_..." />
+
+                <!-- Logged-out: show Login / Signup -->
+                <div id="authForms" style="display: flex; gap: 20px; flex-wrap: wrap;">
+                    <div style="flex: 1; min-width: 280px; border: 1px solid #e0e0e0; padding: 14px; border-radius: 6px; background: #fafbff;">
+                        <h3 style="margin-top: 0;">🔐 Login</h3>
+                        <div class="form-group">
+                            <label for="loginEmail">Email:</label>
+                            <input type="email" id="loginEmail" placeholder="you@example.com" autocomplete="username" />
+                        </div>
+                        <div class="form-group">
+                            <label for="loginPassword">Password:</label>
+                            <input type="password" id="loginPassword" autocomplete="current-password" />
+                        </div>
+                        <button onclick="login()" id="loginBtn" style="width: 100%;">Login</button>
+                    </div>
+                    <div style="flex: 1; min-width: 280px; border: 1px solid #e0e0e0; padding: 14px; border-radius: 6px; background: #fafbff;">
+                        <h3 style="margin-top: 0;">📝 Sign Up</h3>
+                        <div class="form-group">
+                            <label for="signupEmail">Email:</label>
+                            <input type="email" id="signupEmail" placeholder="you@example.com" autocomplete="username" />
+                        </div>
+                        <div class="form-group">
+                            <label for="signupPassword">Password:</label>
+                            <input type="password" id="signupPassword" placeholder="8+ characters" autocomplete="new-password" />
+                        </div>
+                        <div class="form-group">
+                            <label for="signupRole">Role:</label>
+                            <select id="signupRole">
+                                <option value="reader">Reader (query only)</option>
+                                <option value="uploader">Uploader (query + upload)</option>
+                                <option value="admin">Admin (full access)</option>
+                            </select>
+                        </div>
+                        <button onclick="signup()" id="signupBtn" style="width: 100%;">Create Account</button>
+                    </div>
+                </div>
+
+                <!-- Logged-in: show user info + logout -->
+                <div id="userPanel" style="display: none; padding: 14px; border-radius: 6px; background: #eef7ff; border: 1px solid #b3d9ff;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+                        <div>
+                            <strong id="userEmail">-</strong>
+                            <span id="userRole" style="background: #667eea; color: #fff; padding: 2px 8px; border-radius: 10px; font-size: 11px; margin-left: 6px;">-</span>
+                        </div>
+                        <div>
+                            <button onclick="refreshToken()" style="padding: 6px 12px; font-size: 12px;">🔄 Refresh</button>
+                            <button onclick="logout()" style="padding: 6px 12px; font-size: 12px; background: #d9534f; color: #fff; border: none; border-radius: 4px;">Logout</button>
+                        </div>
+                    </div>
+                    <div style="font-size: 11px; color: #666; margin-top: 8px;">
+                        Access token stored in memory. Refresh token stored in httpOnly cookie.
+                    </div>
                 </div>
             </div>
 
@@ -514,8 +563,12 @@
                 <div style="background: #f0f4ff; padding: 10px; border-radius: 5px; margin-bottom: 15px; font-size: 12px;">
                     <strong>Debug Info:</strong><br>
                     API URL: <span id="debugUrl" style="color: #667eea;">-</span><br>
-                    API Key: <span id="debugKey" style="color: #667eea;">-</span><br>
+                    <span id="debugKeyRow">API Key: <span id="debugKey" style="color: #667eea;">-</span></span>
                     <button type="button" onclick="debugCheck()" style="margin-top: 8px; padding: 6px 12px; font-size: 11px;">🔍 Check Config</button>
+                </div>
+                <div class="form-group" style="margin-bottom: 15px;">
+                    <label for="apiKey">Service API Key (X-API-Key):</label>
+                    <input type="text" id="apiKey" placeholder="fsr_..." />
                 </div>
                 <button onclick="listKeys()">📋 List All Keys</button>
                 <button onclick="openCreateKeyModal()" style="margin-left: 10px;">➕ Create New Key</button>
@@ -549,8 +602,187 @@
         let selectedBatchFiles = [];
         let smartUploadFiles = [];
 
+        // JWT state (kept in memory, not localStorage)
+        let accessToken = null;
+        let currentUser = null;
+
         function getApiUrl() { return document.getElementById('apiUrl').value; }
         function getApiKey() { return document.getElementById('apiKey').value; }
+
+        // Build Authorization header: prefer JWT bearer, fall back to X-API-Key
+        function authHeaders(extra = {}) {
+            if (accessToken) {
+                return { ...extra, 'Authorization': 'Bearer ' + accessToken };
+            }
+            const key = getApiKey();
+            if (key) {
+                return { ...extra, 'X-API-Key': key };
+            }
+            return extra;
+        }
+
+        // Refresh the access token using the httpOnly refresh cookie
+        async function refreshToken() {
+            try {
+                const response = await fetch(`${getApiUrl()}/auth/refresh`, {
+                    method: 'POST',
+                    credentials: 'include'
+                });
+                if (!response.ok) {
+                    throw new Error('Refresh failed');
+                }
+                const data = await response.json();
+                accessToken = data.access_token;
+                return true;
+            } catch (error) {
+                console.error('Token refresh failed:', error.message);
+                accessToken = null;
+                currentUser = null;
+                renderAuthState();
+                return false;
+            }
+        }
+
+        // Try to restore session on page load by calling /auth/me
+        async function restoreSession() {
+            try {
+                const response = await fetch(`${getApiUrl()}/auth/me`, {
+                    credentials: 'include'
+                });
+                if (response.ok) {
+                    const data = await response.json();
+                    currentUser = data;
+                    // We don't have the access token here, so we need to refresh to get one.
+                    // This is fine because the refresh cookie is sent automatically.
+                    await refreshToken();
+                }
+            } catch (error) {
+                // Not logged in — that's fine
+            }
+        }
+
+        // Update the UI based on whether a user is logged in
+        function renderAuthState() {
+            const forms = document.getElementById('authForms');
+            const panel = document.getElementById('userPanel');
+            if (currentUser) {
+                forms.style.display = 'none';
+                panel.style.display = 'block';
+                document.getElementById('userEmail').textContent = currentUser.email;
+                document.getElementById('userRole').textContent = currentUser.role;
+            } else {
+                forms.style.display = 'flex';
+                panel.style.display = 'none';
+            }
+        }
+
+        // Handle a 401 response by attempting a token refresh and retrying
+        async function fetchWithAuth(url, options = {}) {
+            const response = await fetch(url, options);
+            if (response.status === 401 && accessToken) {
+                const refreshed = await refreshToken();
+                if (refreshed) {
+                    // Retry with the new token
+                    const newOptions = { ...options };
+                    newOptions.headers = authHeaders(options.headers || {});
+                    return await fetch(url, newOptions);
+                }
+            }
+            return response;
+        }
+
+        async function login() {
+            const email = document.getElementById('loginEmail').value.trim();
+            const password = document.getElementById('loginPassword').value;
+            if (!email || !password) {
+                alert('Please enter both email and password.');
+                return;
+            }
+            const btn = document.getElementById('loginBtn');
+            const original = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = 'Logging in...';
+            try {
+                const response = await fetch(`${getApiUrl()}/auth/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({ email, password })
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    alert('❌ Login failed: ' + (data.detail || 'Invalid credentials'));
+                    return;
+                }
+                accessToken = data.access_token;
+                currentUser = { email: data.email, role: data.role };
+                renderAuthState();
+                // Clear the form
+                document.getElementById('loginEmail').value = '';
+                document.getElementById('loginPassword').value = '';
+                alert('✅ Logged in as ' + data.email + ' (' + data.role + ')');
+            } catch (error) {
+                alert('❌ Login error: ' + error.message);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = original;
+            }
+        }
+
+        async function signup() {
+            const email = document.getElementById('signupEmail').value.trim();
+            const password = document.getElementById('signupPassword').value;
+            const role = document.getElementById('signupRole').value;
+            if (!email || !password) {
+                alert('Please enter both email and password.');
+                return;
+            }
+            if (password.length < 8) {
+                alert('❌ Password must be at least 8 characters.');
+                return;
+            }
+            const btn = document.getElementById('signupBtn');
+            const original = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = 'Creating...';
+            try {
+                const response = await fetch(`${getApiUrl()}/auth/signup`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password, role })
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    alert('❌ Signup failed: ' + (data.detail || 'Unknown error'));
+                    return;
+                }
+                alert('✅ Account created! Please log in.');
+                // Switch to login tab
+                document.getElementById('loginEmail').value = email;
+                document.getElementById('signupEmail').value = '';
+                document.getElementById('signupPassword').value = '';
+            } catch (error) {
+                alert('❌ Signup error: ' + error.message);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = original;
+            }
+        }
+
+        async function logout() {
+            try {
+                await fetch(`${getApiUrl()}/auth/logout`, {
+                    method: 'POST',
+                    credentials: 'include'
+                });
+            } catch (error) {
+                // Ignore network errors
+            }
+            accessToken = null;
+            currentUser = null;
+            renderAuthState();
+            alert('✅ Logged out.');
+        }
 
         function formatFileSize(bytes) {
             if (bytes === 0) return '0 Bytes';
@@ -701,9 +933,9 @@
                 formData.append('quarter', document.getElementById('uploadQuarter').value);
                 formData.append('mode', document.getElementById('uploadMode').value);
 
-                const response = await fetch(`${getApiUrl()}/upload`, {
+                const response = await fetchWithAuth(`${getApiUrl()}/upload`, {
                     method: 'POST',
-                    headers: { 'X-API-Key': getApiKey() },
+                    headers: authHeaders(),
                     body: formData
                 });
                 const data = await response.json();
@@ -744,12 +976,11 @@
             try {
                 // DIRECT RESPONSE MODE
                 if (!stream) {
-                    const response = await fetch(`${getApiUrl()}/query?stream=false`, {
+                    const response = await fetchWithAuth(`${getApiUrl()}/query?stream=false`, {
                         method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'X-API-Key': getApiKey()
-                        },
+                        headers: authHeaders({
+                            'Content-Type': 'application/json'
+                        }),
                         body: JSON.stringify(payload)
                     });
                     const data = await response.json();
@@ -763,12 +994,11 @@
                 elem.style.display = 'block';
                 textElem.textContent = 'Loading answer...\n\n';
 
-                const response = await fetch(`${getApiUrl()}/query?stream=true`, {
+                const response = await fetchWithAuth(`${getApiUrl()}/query?stream=true`, {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-API-Key': getApiKey()
-                    },
+                    headers: authHeaders({
+                        'Content-Type': 'application/json'
+                    }),
                     body: JSON.stringify(payload)
                 });
 
@@ -797,6 +1027,12 @@
                 showResponse('smartQueryResponse', { error: error.message }, true);
             }
         }
+
+        // Initialize: try to restore JWT session from refresh cookie
+        document.addEventListener('DOMContentLoaded', () => {
+            restoreSession();
+            renderAuthState();
+        });
 
         // Alias for backward compatibility
         async function smartQuery() {

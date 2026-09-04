@@ -129,12 +129,11 @@ The retriever now:
 1. Validates the question and `top_k` value.
 2. Parses the question.
 3. Embeds the question.
-4. Searches the FAISS index with a configurable candidate count
-   (default: `top_k * 4`, clamped to `[top_k, index.ntotal]`).
-5. Applies metadata filters such as ticker, fiscal year, filing type, company,
+4. Searches the FAISS index.
+5. Oversamples candidates before filtering.
+6. Applies metadata filters such as ticker, fiscal year, filing type, company,
    document type, and quarter when values are available.
-6. Reranks filtered candidates (when enabled) and returns text, scores,
-   chunk identifiers, reranking scores, confidence, and metadata.
+7. Returns text, scores, chunk identifiers, and metadata.
 
 The query parser preserves the first detected company for backward
 compatibility and also exposes all detected company names and tickers. FAISS
@@ -188,12 +187,10 @@ Accepts a validated request such as:
 
 Returns:
 
-- A retrieval status message (or grounded LLM answer when OpenAI is configured)
+- A retrieval status message
 - Retrieved text chunks
 - Metadata for each chunk
-- Citation records with chunk ID, page number, source, score, and
-  optional reranking fields (`rerank_score`, `cross_encoder_score`,
-  `metric_score`, `confidence`)
+- Citation records with chunk ID, page number, source, and score
 
 The current response intentionally reports retrieved evidence. Full grounded
 LLM answer synthesis is planned for a later stage.
@@ -218,23 +215,14 @@ still uses the existing Ollama generation module.
 
 File: `src/retrieval/reranker.py`
 
-Retrieval now reranks metadata-filtered FAISS candidates with `BAAI/bge-reranker-base`
-(upgraded from `cross-encoder/ms-marco-MiniLM-L-6-v2` in Stage 2). The model name
-is configurable via the `RERANKER_MODEL` environment variable. Financial metric
-matches receive an additional relevance boost. The cross-encoder loads lazily, and
-reranking uses the flattened dictionary records produced by the FAISS store.
-
-Each reranked result now carries:
-
-- `rerank_score` — combined cross-encoder + metric boost score
-- `cross_encoder_score` — raw cross-encoder output
-- `metric_score` — financial metric relevance (0.0 or 1.0)
-- `confidence` — min-max normalized score within the result set (0.0–1.0)
+Retrieval now reranks metadata-filtered FAISS candidates with the
+`cross-encoder/ms-marco-MiniLM-L-6-v2` model. Financial metric matches receive
+an additional relevance boost. The cross-encoder loads lazily, and reranking
+uses the flattened dictionary records produced by the FAISS store.
 
 ### 3.9 Tests
 
-File: `tests/test_stage1_foundation.py`, `tests/test_reranking.py`,
-`tests/test_edge_cases.py`, `tests/test_api_integration.py`
+File: `tests/test_stage1_foundation.py`
 
 The current tests verify:
 
@@ -246,28 +234,11 @@ The current tests verify:
 - Grounded OpenAI request formatting is covered with a mocked provider.
 - Retrieval hit rate and mean reciprocal rank are covered with deterministic
    test data.
-- **(Stage 2)** Reranker reorders documents by semantic relevance.
-- **(Stage 2)** Metric boost promotes matching documents when cross-encoder
-   scores are equal.
-- **(Stage 2)** Confidence scores are normalized to 0.0–1.0.
-- **(Stage 2)** Single-result confidence is 1.0.
-- **(Stage 2)** Reranker respects `top_k`.
-- **(Stage 2)** Default model is `BAAI/bge-reranker-base` and is configurable.
-- **(Stage 3)** OpenAI SDK sends a grounded prompt with context.
-- **(Stage 3)** Streaming yields individual token deltas.
-- **(Stage 3)** `/query/stream` SSE endpoint returns token events and a
-   final done event with citations.
-- **(Stage 3)** Comparison prompt detects multiple companies.
-- **(Stage 3)** Single-company context uses the standard prompt.
-- **(Stage 3)** Faithfulness score detects hallucinated content.
-- **(Stage 3)** Relevance score checks that the requested metric appears
-   in the answer.
 
 The latest test run passed:
 
 ```text
-52 passed
-```
+6 passed
 
 ### 3.10 Evaluation
 
@@ -302,116 +273,6 @@ are excluded from the image; a prepared `vector_db` directory must be mounted
 at runtime for query readiness. Cross-encoder reranking is disabled by default
 in Docker to avoid out-of-memory kills; it remains enabled by default locally.
 ```
-
-### 3.13 Stage 2 — Retrieval quality improvement
-
-Files: `src/retrieval/reranker.py`, `src/retrieval/retriever.py`,
-`src/api.py`, `tests/test_reranking.py`
-
-Stage 2 upgraded retrieval quality across four areas:
-
-1. **Reranker model upgrade** — Switched from `cross-encoder/ms-marco-MiniLM-L-6-v2`
-   to `BAAI/bge-reranker-base`, which provides stronger relevance judgments for
-   domain-specific financial text. The model name is now configurable via the
-   `RERANKER_MODEL` environment variable.
-
-2. **Configurable candidate count** — `retrieve_documents()` accepts an optional
-   `candidate_count` parameter. The default oversampling was reduced from
-   `top_k * 10` to `top_k * 4`, which is sufficient headroom for metadata
-   filtering without wasting search time on large indices. The count is clamped
-   to `[top_k, index.ntotal]`.
-
-3. **Confidence signals** — Each reranked result now includes a `confidence`
-   field (0.0–1.0) calculated via min-max normalization of the rerank scores
-   within the result set. The API `Citation` model surfaces `rerank_score`,
-   `cross_encoder_score`, `metric_score`, and `confidence` as optional fields.
-
-4. **Reranking tests** — Seven new tests in `tests/test_reranking.py` prove
-   that the reranker changes ordering when semantic relevance differs, that
-   metric boosts promote matching documents, that confidence is correctly
-   normalized, and that the model name is configurable.
-
-### 3.14 Stage 3 — Answer generation and evaluation
-
-Files: `src/generation/llm.py`, `src/api.py`, `src/evaluation/metrics.py`,
-`src/evaluation/benchmark.py`, `tests/test_generation.py`
-
-Stage 3 upgraded the generation module and added evaluation metrics:
-
-1. **OpenAI SDK migration** — Replaced raw `requests.post` calls with the
-   official `openai` Python SDK. The non-streaming `generate_openai_answer()`
-   function now uses `client.chat.completions.create()`. Model, temperature,
-   and max tokens are configurable via `OPENAI_MODEL`, `OPENAI_TEMPERATURE`,
-   and `OPENAI_MAX_TOKENS` environment variables.
-
-2. **Streaming generation** — Added `generate_openai_answer_stream()` that
-   yields token deltas via the SDK's streaming API (`stream=True`). The
-   `POST /query/stream` endpoint wraps this as Server-Sent Events (SSE),
-   emitting `{"token": "..."}` events followed by a final
-   `{"done": true, "citations": [...]}` event.
-
-3. **Comparison-aware prompts** — The new `_build_system_prompt()` helper
-   inspects retrieved source lines for multiple company identifiers. When two
-   or more companies are detected, the system prompt instructs the model to
-   structure the answer as a side-by-side comparison.
-
-4. **Answer quality metrics** — `evaluate_answer_quality()` in
-   `src/evaluation/metrics.py` scores generated answers on two axes:
-   - **Faithfulness**: extractive token overlap between the answer and context.
-     A fully grounded answer scores close to 1.0.
-   - **Relevance**: whether the answer addresses the financial metric from the
-     question (detected via `query_parser`).
-
-5. **Benchmark expansion** — `benchmark.py` now accepts
-   `--include-generation` to run generation on each evaluation case and report
-   `avg_faithfulness` and `avg_relevance` alongside retrieval metrics.
-
-6. **Generation tests** — Seven new tests in `tests/test_generation.py` cover
-   SDK prompt formatting, streaming token deltas, SSE endpoint events,
-   comparison prompt detection, faithfulness scoring, and relevance scoring.
-
-### 3.15 Stage 4 — Hardening and production readiness
-
-Files: `src/api.py`, `src/ingestion/sec_ingestion.py`, `src/processing/parser.py`,
-`src/evaluation/verify_dataset.py`, `tests/test_edge_cases.py`, `requirements.txt`,
-`Dockerfile`, `README.md`
-
-Stage 4 hardened the system for production use across five areas:
-
-1. **API rate limiting** — Integrated `slowapi` middleware to enforce
-   per-endpoint rate limits:
-   - `/query` and `/query/stream`: 20 requests/minute per IP
-   - `/upload`: 5 requests/minute per IP
-   - Returns `429 Too Many Requests` when limit exceeded
-   - Limits configurable via `RATE_LIMIT_QUERY` and `RATE_LIMIT_UPLOAD` env vars
-
-2. **Upload size validation** — Added `MAX_UPLOAD_SIZE` check (default: 25 MB)
-   to the upload endpoint. Rejects files exceeding the limit with
-   `413 Payload Too Large`. Configurable via `MAX_UPLOAD_SIZE_MB` env var.
-
-3. **SEC ingestion retries** — Applied `tenacity` retry decorators to
-   `get_company_filings()` and `download_filing()` functions. Retries up to
-   3 times on network errors with exponential backoff (2–10 seconds). Logs
-   retry attempts for observability.
-
-4. **Robust HTML parsing** — Added try-except blocks around BeautifulSoup
-   parsing in `src/processing/parser.py`. Handles malformed HTML, invalid
-   UTF-8, and parsing errors gracefully by returning empty string and logging
-   warnings instead of crashing.
-
-5. **Evaluation dataset verification** — Created `verify_dataset.py` script
-   that validates chunk IDs in `evaluation.json` exist in the FAISS index.
-   Reports coverage statistics and warns if less than 80% of cases have
-   valid IDs.
-
-6. **Expanded test coverage** — Added tests for SEC retry logic, API rate
-   limits, upload size validation, and HTML parsing edge cases to
-   `tests/test_edge_cases.py`.
-
-7. **Configuration documentation** — Updated `README.md` with complete
-   configuration section covering rate limits, upload size, retry behavior,
-   OpenAI settings, and reranking options. Updated Dockerfile with default
-   ENV values for production deployment.
 
 ## 4. Git Milestones
 
@@ -458,7 +319,6 @@ The main dependencies used by the current implementation are:
 - `langchain-text-splitters` for existing SEC text chunking
 - `beautifulsoup4` and `lxml` for SEC HTML parsing
 - `requests` for SEC and Ollama HTTP calls
-- `openai` for grounded answer generation (SDK)
 - `pydantic` for API validation
 - `pytest` for tests
 
@@ -506,154 +366,53 @@ python -m src.ingestion.sec_ingestion --company apple
 
 ## 7. What Is Not Complete Yet
 
-The project is now production-ready for small-to-medium scale deployment with authentication.
-The main remaining areas for future enhancement are:
+The project is a functional foundation, not a finished production service.
+The main gaps are:
 
-- Advanced security hardening (CORS, CSP headers, rate limiting per user)
-- Performance profiling and optimization for large-scale deployments
-- CI/CD pipeline integration
-- Monitoring, logging, and alerting infrastructure
-- Multi-tenant support with user isolation and per-user quotas
-- Additional authentication methods (JWT, OAuth2, SSO)
-
-The following items have been completed:
-
-- Full upload-to-query integration test
-- Persistent FAISS update behavior (append, not rebuild)
-- Complete API filter support for every upload metadata field
-- Cross-encoder reranking with financial metric boosting
-- Grounded OpenAI answer generation (streaming and non-streaming)
-- 30-case benchmark dataset with verified chunk IDs
-- Structured exception handling
-- Docker and deployment configuration
-- Comparison-aware generation prompts
-- Answer quality metrics (faithfulness, relevance)
-- API rate limiting and upload size validation
-- Automatic retry logic for SEC ingestion
-- Robust HTML parsing with error recovery
-- Evaluation dataset verification tooling
-- API key authentication and authorization
-- Role-based access control (reader, admin)
-- Admin endpoints for API key management
-
-### 3.16 Stage 5 — Authentication and authorization
-
-Files: `src/auth/models.py`, `src/auth/api_keys.py`, `src/auth/dependencies.py`,
-`src/api.py`, `tests/test_auth.py`, `requirements.txt`, `Dockerfile`, `README.md`
-
-Stage 5 added API key authentication and role-based authorization across six areas:
-
-1. **API key models** — Created `src/auth/models.py` with Pydantic models for
-   API keys, user roles (`reader`, `admin`), and permission checks. Keys are
-   stored as `APIKeyRecord` with SHA-256 hashed values.
-
-2. **Key management** — Implemented `src/auth/api_keys.py` with file-based
-   JSON storage for API keys. Features:
-   - Key generation with `fsr_` prefix and 32 bytes of randomness
-   - SHA-256 hashing (raw keys never stored)
-   - Validation, revocation, and listing
-   - CLI bootstrap: `python -m src.auth.api_keys`
-   - Configurable storage path via `API_KEYS_FILE` env var
-
-3. **FastAPI dependencies** — Created `src/auth/dependencies.py` with reusable
-   auth dependencies:
-   - `require_api_key` — validates `X-API-Key` header for protected endpoints
-   - `require_admin` — enforces admin role for key management
-   - `require_upload` — checks upload permission (admin only)
-   - Configurable via `AUTH_REQUIRED` env var (default: `true`)
-
-4. **Protected endpoints** — Updated `src/api.py` to wire authentication:
-   - `/upload`, `/query`, `/query/stream` require valid API keys when auth enabled
-   - `/health` and `/ready` remain public (load balancer probes)
-   - Added admin endpoints: `POST /admin/keys`, `GET /admin/keys`, `DELETE /admin/keys/{key_id}`
-   - Admin endpoints always require authentication
-
-5. **Role-based access control** — Two roles with distinct permissions:
-   - `reader` — can query documents
-   - `admin` — can query, upload documents, and manage API keys
-
-6. **Comprehensive testing** — Added `tests/test_auth.py` with 24 tests covering:
-   - Key creation, validation, hashing, and revocation
-   - Role enforcement (reader vs admin permissions)
-   - Protected endpoint access control
-   - Admin endpoint security
-   - Authentication bypass when `AUTH_REQUIRED=false`
-   - Public endpoint accessibility
-
-7. **Configuration and documentation** — Updated configuration docs:
-   - `AUTH_REQUIRED` env var for toggling authentication
-   - `ADMIN_API_KEY` for bootstrap setup
-   - `API_KEYS_FILE` for custom storage path
-   - Updated README with authentication setup and usage
-   - Updated Dockerfile with `AUTH_REQUIRED=true` default
-
-### 3.17 Stage 6 — CI/CD Pipeline and Automated Deployment
-
-Files: `.github/workflows/test.yml`, `.github/workflows/docker.yml`,
-`.github/workflows/security.yml`, `.github/workflows/deploy.yml`,
-`pyproject.toml`, `README.md`
-
-Stage 6 added continuous integration and deployment automation across five areas:
-
-1. **Automated testing workflow** — Created `.github/workflows/test.yml` that:
-   - Runs on every push and pull request to main/develop branches
-   - Executes all 83 tests with pytest
-   - Generates coverage reports with pytest-cov
-   - Uploads coverage to Codecov
-   - Uses Python 3.12 with pip caching for faster builds
-   - Disables auth and reranking for CI environment
-
-2. **Docker build and push workflow** — Created `.github/workflows/docker.yml` that:
-   - Builds Docker images on main branch pushes and version tags
-   - Pushes images to GitHub Container Registry (ghcr.io)
-   - Generates semantic version tags (v1.0.0, v1.0, v1)
-   - Uses Docker Buildx with layer caching
-   - Only builds (no push) for pull requests
-
-3. **Security scanning workflow** — Created `.github/workflows/security.yml` that:
-   - Scans dependencies with Trivy vulnerability scanner
-   - Scans Docker images for security issues
-   - Runs Safety check on Python dependencies
-   - Runs Bandit for Python code security analysis
-   - Uploads SARIF results to GitHub Security tab
-   - Runs weekly on schedule (Sundays at 00:00 UTC)
-
-4. **Deployment workflow template** — Created `.github/workflows/deploy.yml` with:
-   - Manual deployment trigger via workflow_dispatch
-   - Automatic deployment on version tags
-   - Templates for AWS ECS, Google Cloud Run, Azure Container Instances
-   - SSH-based VPS deployment option
-   - Environment-based configuration (staging, production)
-
-5. **Test coverage configuration** — Created `pyproject.toml` with:
-   - pytest configuration for test discovery
-   - Coverage settings with source tracking
-   - Exclusion patterns for test files and virtual environments
-   - Coverage reporting with missing line indicators
-
-6. **Documentation and badges** — Updated README with:
-   - GitHub Actions status badges for test, docker, and security workflows
-   - CI/CD section explaining automated workflows
-   - Local testing and Docker build instructions
-   - Deployment configuration guide
+- Full upload-to-query integration test.
+- Persistent FAISS update behavior for multiple uploads instead of rebuilding
+  the complete local index each time.
+- Complete API filter support for every upload metadata field.
+- Cross-encoder reranking connected to the FAISS retriever.
+- Replacement of the placeholder retrieval response with grounded OpenAI
+  answer generation.
+- Streaming-ready answer generation.
+- Multi-company comparison workflows.
+- Benchmark dataset and retrieval/faithfulness evaluation.
+- Structured logging and exception middleware.
+- Authentication, rate limiting, and request limits.
+- Docker and deployment configuration.
+- Complete unit and integration test coverage.
 
 ## 8. Next Planned Stage
 
-Stage 6 (CI/CD pipeline) is complete. The system now has:
-- Automated testing on every push and PR
-- Docker image building and publishing to GitHub Container Registry
-- Security scanning for dependencies and Docker images
-- Deployment workflow templates for major cloud providers
-- Test coverage reporting and configuration
-- CI/CD status badges in README
+The next planned feature is Stage 2: retrieval quality improvement.
 
-Future stages could focus on:
-- Advanced security features (CORS configuration, input sanitization beyond Pydantic, CSP headers)
-- Performance optimization and caching strategies (Redis for vector cache, query result caching)
-- Monitoring and alerting integration (Prometheus metrics, structured logging, APM)
-- Multi-user support with request isolation (per-user rate limits, usage tracking)
-- Additional authentication methods (JWT tokens, OAuth2, SSO integration)
-- Enhanced RAG features (multi-modal support, hybrid search, conversational context)
+Target flow:
+
+```text
+Question
+   |
+   v
+Embedding
+   |
+   v
+FAISS top 20 candidates
+   |
+   v
+BAAI/bge-reranker-base
+   |
+   v
+Best 5 chunks
+   |
+   v
+Grounded answer generation
+```
+
+Stage 2 should add a FAISS-compatible reranker interface, configurable
+candidate and final-result counts, reranking scores, confidence information,
+and tests proving that the reranker changes ordering when semantic relevance
+improves.
 
 ## 9. Design Decisions To Remember
 
@@ -665,3 +424,5 @@ Future stages could focus on:
 - Generated vector files belong in `vector_db/` and should not be committed.
 - Stage 1 should remain independently understandable before adding reranking,
   LLM generation, evaluation, or deployment complexity.
+
+
