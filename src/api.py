@@ -22,12 +22,10 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
-from src.auth.api_keys import create_api_key, list_api_keys, revoke_api_key, validate_key
-from src.auth.dependencies import require_admin, require_api_key, require_upload
-from src.auth.models import APIKeyCreate, APIKeyInfo, APIKeyRecord, APIKeyResponse
 from src.auth import database as auth_db
 from src.auth import jwt_utils
 from src.auth import refresh as refresh_tokens
+from src.auth.dependencies import require_admin, require_auth, require_upload
 from passlib.hash import bcrypt
 from src.cache.manager import build_cache_key, get_cache_manager
 from src.embeddings.embedder import generate_embeddings, store_embeddings
@@ -61,7 +59,7 @@ app.add_middleware(
     allow_origins=["*"],  # Allow all origins (for development/testing)
     allow_credentials=True,
     allow_methods=["*"],  # Allow all HTTP methods (GET, POST, DELETE, etc.)
-    allow_headers=["*"],  # Allow all headers (including X-API-Key)
+    allow_headers=["*"],  # Allow all headers (including Authorization)
 )
 
 # Seed admin from env on startup
@@ -81,13 +79,13 @@ def custom_openapi():
         routes=app.routes,
     )
 
-    # Add security scheme for API Key
+    # Add JWT Bearer security scheme
     openapi_schema["components"]["securitySchemes"] = {
-        "APIKeyHeader": {
-            "type": "apiKey",
-            "in": "header",
-            "name": "X-API-Key",
-            "description": "API Key for authentication. Pass via X-API-Key header.",
+        "BearerAuth": {
+            "type": "http",
+            "scheme": "bearer",
+            "bearerFormat": "JWT",
+            "description": "JWT access token from /auth/login. Pass as Authorization: Bearer <token>",
         }
     }
 
@@ -300,19 +298,13 @@ async def auth_logout(request: Request, response: Response):
 
 @app.get("/auth/me")
 async def auth_me(request: Request):
-    """Return current user info from JWT or API key."""
+    """Return current user info from JWT Bearer token."""
     auth_header = request.headers.get("Authorization")
     if auth_header and auth_header.startswith("Bearer "):
         claims = jwt_utils.verify_access_token(auth_header.split(" ", 1)[1])
         if claims:
             return {"user_id": claims["sub"], "email": claims.get("email"), "role": claims.get("role")}
-    # Fallback: try X-API-Key for service accounts
-    raw_key = request.headers.get("X-API-Key")
-    if raw_key:
-        record = validate_key(raw_key)
-        if record:
-            return {"key_id": record.key_id, "name": record.name, "role": record.role.value}
-    raise HTTPException(status_code=401, detail="Not authenticated.")
+    raise HTTPException(status_code=401, detail="Not authenticated. Pass Authorization: Bearer <token>.")
 
 
 class UploadResponse(BaseModel):
@@ -352,7 +344,7 @@ async def upload_pdf(
     fiscal_year: str = Form(...),
     quarter: str = Form(...),
     mode: str = Form("auto", description="Processing mode: 'auto', 'sync', or 'async'"),
-    _key: APIKeyRecord | None = Depends(require_upload),
+    _claims: dict | None = Depends(require_upload),
 ):
     """Smart Upload: Extract, chunk, embed, and index financial PDFs."""
     _ = (request, _key)
@@ -476,7 +468,7 @@ async def query_documents(
     request: Request,
     query_request: QueryRequest,
     stream: str = "false",
-    _key: APIKeyRecord | None = Depends(require_api_key),
+    _claims: dict | None = Depends(require_auth),
 ):
     """Smart Query: Retrieve and optionally stream answer.
 
@@ -607,7 +599,7 @@ async def query_documents(
 async def query_stream(
     request: Request,
     query_request: QueryRequest,
-    _key: APIKeyRecord | None = Depends(require_api_key),
+    _claims: dict | None = Depends(require_auth),
 ):
     """Streaming-only query endpoint with full cache support.
 
@@ -676,7 +668,7 @@ async def query_stream(
 
 
 @app.get("/cache/stats", response_model=CacheStats)
-async def cache_stats(_key: APIKeyRecord | None = Depends(require_api_key)):
+async def cache_stats(_claims: dict | None = Depends(require_auth)):
     """Return current cache hit/miss counters and backend info."""
     stats = _query_cache_stats
     total_hits = stats["query_hits"] + stats["stream_hits"]
@@ -764,39 +756,3 @@ def _build_context(results: list[dict[str, Any]]) -> str:
 
 
 
-# ---------------------------------------------------------------------------
-# Admin Endpoints
-# ---------------------------------------------------------------------------
-
-@app.post("/admin/keys", response_model=APIKeyResponse)
-async def create_key(
-    request: Request,
-    key_request: APIKeyCreate,
-    _admin: APIKeyRecord = Depends(require_admin)
-) -> APIKeyResponse:
-    """Create a new API key. Requires admin privileges."""
-    logger.info("Admin %s created a new API key", _admin.key_id)
-    return create_api_key(key_request)
-
-
-@app.get("/admin/keys", response_model=list[APIKeyInfo])
-async def list_keys(
-    request: Request,
-    _admin: APIKeyRecord = Depends(require_admin)
-) -> list[APIKeyInfo]:
-    """List all API keys. Requires admin privileges."""
-    logger.info("Admin %s listed API keys", _admin.key_id)
-    return list_api_keys()
-
-
-@app.delete("/admin/keys/{key_id}")
-async def delete_key(
-    request: Request,
-    key_id: str,
-    _admin: APIKeyRecord = Depends(require_admin)
-) -> dict[str, str]:
-    """Revoke an API key. Requires admin privileges."""
-    if revoke_api_key(key_id):
-        logger.info("Admin %s revoked API key %s", _admin.key_id, key_id)
-        return {"detail": f"Key {key_id} revoked successfully"}
-    raise HTTPException(status_code=404, detail="API key not found")

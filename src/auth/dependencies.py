@@ -1,19 +1,15 @@
-"""FastAPI dependencies for API key authentication and role checks.
+"""FastAPI dependencies for JWT Bearer authentication and role checks.
 
 Usage in endpoints::
 
-    from src.auth.dependencies import require_api_key, require_admin, require_upload
+    from src.auth.dependencies import require_auth, require_admin, require_upload
 
     @app.post("/query")
-    async def query(request: Request, key: APIKeyRecord = Depends(require_api_key)):
+    async def query(request: Request, claims = Depends(require_auth)):
         ...
 
     @app.post("/upload")
-    async def upload(request: Request, key: APIKeyRecord = Depends(require_upload)):
-        ...
-
-    @app.post("/admin/keys")
-    async def create_key(request: Request, key: APIKeyRecord = Depends(require_admin)):
+    async def upload(request: Request, claims = Depends(require_upload)):
         ...
 """
 
@@ -21,10 +17,10 @@ from __future__ import annotations
 
 import os
 
-from fastapi import HTTPException, Request, status
+from fastapi import Depends, HTTPException, Request, status
 
-from src.auth.api_keys import validate_key
-from src.auth.models import APIKeyRecord
+from src.auth import jwt_utils
+from src.auth.models import Role
 
 
 def _is_auth_required() -> bool:
@@ -36,98 +32,99 @@ def _is_auth_required() -> bool:
     return os.getenv("AUTH_REQUIRED", "true").lower() in ("true", "1", "yes")
 
 
-def _extract_api_key(request: Request) -> str | None:
-    """Extract the API key from the ``X-API-Key`` header."""
-    return request.headers.get("X-API-Key")
+def _extract_bearer(request: Request) -> str | None:
+    """Extract the JWT token from the Authorization: Bearer header."""
+    header = request.headers.get("Authorization")
+    if header and header.startswith("Bearer "):
+        return header.split(" ", 1)[1]
+    return None
 
 
-async def require_api_key(request: Request) -> APIKeyRecord | None:
-    """Validate the ``X-API-Key`` header and return the key record.
+async def require_auth(request: Request) -> dict:
+    """Validate the JWT Bearer token and return the claims.
 
     When ``AUTH_REQUIRED`` is ``false`` this dependency returns ``None``
     so callers continue to work without credentials.
 
     Raises:
-        HTTPException: 401 if key is missing or invalid, 503 if validation fails
+        HTTPException: 401 if token is missing or invalid
     """
     if not _is_auth_required():
         return None
 
-    raw_key = _extract_api_key(request)
-    if not raw_key:
+    token = _extract_bearer(request)
+    if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing API key. Pass it via the X-API-Key header.",
+            detail="Missing Bearer token. Pass it via the Authorization: Bearer header.",
         )
 
-    record = validate_key(raw_key)
-    if record is None:
+    claims = jwt_utils.verify_access_token(token)
+    if claims is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or revoked API key.",
+            detail="Invalid or expired token.",
         )
-    return record
+    return claims
 
 
-async def require_admin(request: Request) -> APIKeyRecord:
-    """Require an authenticated admin key.
+async def require_admin(request: Request) -> dict:
+    """Require an authenticated user with admin role.
 
     Always enforced, even when ``AUTH_REQUIRED`` is ``false``.
-    Admin role is required for key management operations.
 
     Raises:
-        HTTPException: 401 if key missing/invalid, 403 if not admin role
+        HTTPException: 401 if token missing/invalid, 403 if not admin role
     """
-    raw_key = _extract_api_key(request)
-    if not raw_key:
+    token = _extract_bearer(request)
+    if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing API key. Pass it via the X-API-Key header.",
+            detail="Missing Bearer token.",
         )
 
-    record = validate_key(raw_key)
-    if record is None:
+    claims = jwt_utils.verify_access_token(token)
+    if claims is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or revoked API key.",
+            detail="Invalid or expired token.",
         )
-    if not record.has_permission("admin"):
+    if claims.get("role") != Role.ADMIN.value:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Admin privileges required. Your key has role '{record.role.value}'.",
+            detail=f"Admin privileges required. Your role is '{claims.get('role')}'.",
         )
-    return record
+    return claims
 
 
-async def require_upload(request: Request) -> APIKeyRecord | None:
-    """Require at least ``upload`` permission (admin role).
+async def require_upload(request: Request) -> dict | None:
+    """Require at least uploader or admin role.
 
     When ``AUTH_REQUIRED`` is ``false`` this returns ``None``.
-    Upload operations require admin role.
 
     Raises:
-        HTTPException: 401 if key missing/invalid, 403 if no upload permission
+        HTTPException: 401 if token missing/invalid, 403 if no upload permission
     """
     if not _is_auth_required():
         return None
 
-    raw_key = _extract_api_key(request)
-    if not raw_key:
+    token = _extract_bearer(request)
+    if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing API key. Pass it via the X-API-Key header.",
+            detail="Missing Bearer token.",
         )
 
-    record = validate_key(raw_key)
-    if record is None:
+    claims = jwt_utils.verify_access_token(token)
+    if claims is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or revoked API key.",
+            detail="Invalid or expired token.",
         )
-    if not record.has_permission("upload"):
+    role = claims.get("role")
+    if role not in (Role.ADMIN.value, "uploader"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Upload permission required. Your key has role '{record.role.value}'; 'admin' role needed.",
+            detail=f"Upload permission required. Your role is '{role}'; 'admin' or 'uploader' needed.",
         )
-    return record
-
+    return claims

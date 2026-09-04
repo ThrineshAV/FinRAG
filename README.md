@@ -31,9 +31,7 @@ Stages 1–6 are complete:
 - Robust error handling for SEC ingestion and HTML parsing
 - Docker deployment configuration with configurable limits
 - JWT-based user authentication with email/password and httpOnly refresh cookies
-- API key authentication via `X-API-Key` header (for service accounts)
 - Role-based access control (reader, uploader, admin)
-- Admin endpoints for API key management
 - GitHub Actions CI/CD pipeline with automated testing
 - Docker image building and publishing to GitHub Container Registry
 - Security scanning with Trivy and Bandit
@@ -112,9 +110,7 @@ it, the endpoint returns retrieved evidence as before.
 The API supports the following environment variables:
 
 ### Authentication
-- `AUTH_REQUIRED` — Enable API key authentication (default: `true`). Set to `false` for local development or backward compatibility.
-- `ADMIN_API_KEY` — Optional bootstrap admin key for initial setup. If not set, generate one with `python -m src.auth.api_keys`.
-- `API_KEYS_FILE` — Path to API keys storage file (default: `data/api_keys.json`)
+- `AUTH_REQUIRED` — Enable JWT authentication (default: `true`). Set to `false` for local development.
 
 **Note:** Admin endpoints (`/admin/*`) always require authentication, even when `AUTH_REQUIRED` is `false`.
 
@@ -181,10 +177,7 @@ http://127.0.0.1:8000/docs
 
 The API supports two authentication methods:
 
-1. **JWT + Password** — Recommended for end users. Uses email/password signup and login, returns an access token (15-min JWT) and an httpOnly refresh cookie (7-day).
-2. **X-API-Key** — For service accounts and scripts. Longer-lived static keys.
-
-Both methods are accepted on all protected endpoints.
+1. **JWT + Password** — End users. Uses email/password signup and login, returns an access token (15-min JWT) and an httpOnly refresh cookie (7-day).
 
 ### Environment Variables
 
@@ -247,26 +240,9 @@ curl -X POST http://127.0.0.1:8000/auth/logout -b cookies.txt
 
 Revokes the refresh token and clears the cookie.
 
-### Service Account API Keys (X-API-Key)
-
-For automated scripts, create a static API key via the admin panel or using the CLI:
-
-```powershell
-python -m src.auth.api_keys
-```
-
-Then use it as:
-
-```bash
-curl -X POST http://127.0.0.1:8000/query \
-  -H "X-API-Key: fsr_your_key_here" \
-  -H "Content-Type: application/json" \
-  -d '{"question": "What was revenue?"}'
-```
-
 ### Roles
 
-| Role | Query | Upload | Admin Keys |
+| Role | Query | Upload | Admin |
 |---|---|---|---|
 | `reader` | ✅ | ❌ | ❌ |
 | `uploader` | ✅ | ✅ | ❌ |
@@ -279,7 +255,7 @@ $env:AUTH_REQUIRED="false"
 uvicorn src.api:app --reload
 ```
 
-> **Note:** Admin endpoints (`/admin/*`) always require authentication, even when `AUTH_REQUIRED=false`.
+> **Note:** Admin-only endpoints always require authentication, even when `AUTH_REQUIRED=false`.
 
 ### Available Endpoints
 
@@ -327,29 +303,6 @@ page citations.
 
 Streams answers as Server-Sent Events (SSE). Requires `OPENAI_API_KEY`. Same request format as `/query`.
 
-### Admin Endpoints (Require Admin Key)
-
-`POST /admin/keys`
-
-Create a new API key. Request body:
-
-```json
-{
-  "name": "team-name",
-  "role": "reader"
-}
-```
-
-Returns the raw key (shown once) and key metadata.
-
-`GET /admin/keys`
-
-List all API keys (no secret material).
-
-`DELETE /admin/keys/{key_id}`
-
-Revoke an API key by its ID.
-
 ## Evaluate Retrieval
 
 The benchmark runner reads cases from `data/evaluation.json` and reports hit
@@ -369,7 +322,7 @@ The project uses GitHub Actions for continuous integration and deployment:
 
 ### Automated Workflows
 
-- **Test** — Runs on every push and PR. Executes all 83 tests with coverage reporting.
+- **Test** — Runs on every push and PR. Executes all tests with coverage reporting.
 - **Docker** — Builds and pushes Docker images to GitHub Container Registry on tags and main branch.
 - **Security** — Scans dependencies and Docker images for vulnerabilities using Trivy and Bandit.
 - **Deploy** — Template workflow for cloud deployment (AWS/GCP/Azure).

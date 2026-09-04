@@ -557,41 +557,13 @@
                 </div>
             </div>
 
-            <!-- Admin Keys -->
+            <!-- Debug Info -->
             <div class="section">
-                <h2>🔑 Admin Keys</h2>
+                <h2>🔍 Debug</h2>
                 <div style="background: #f0f4ff; padding: 10px; border-radius: 5px; margin-bottom: 15px; font-size: 12px;">
-                    <strong>Debug Info:</strong><br>
+                    <strong>Config:</strong><br>
                     API URL: <span id="debugUrl" style="color: #667eea;">-</span><br>
-                    <span id="debugKeyRow">API Key: <span id="debugKey" style="color: #667eea;">-</span></span>
                     <button type="button" onclick="debugCheck()" style="margin-top: 8px; padding: 6px 12px; font-size: 11px;">🔍 Check Config</button>
-                </div>
-                <div class="form-group" style="margin-bottom: 15px;">
-                    <label for="apiKey">Service API Key (X-API-Key):</label>
-                    <input type="text" id="apiKey" placeholder="fsr_..." />
-                </div>
-                <button onclick="listKeys()">📋 List All Keys</button>
-                <button onclick="openCreateKeyModal()" style="margin-left: 10px;">➕ Create New Key</button>
-
-                <div id="createKeyModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:1000; justify-content:center; align-items:center;">
-                    <div style="background:#fff; padding:24px; border-radius:8px; max-width:400px; width:90%;">
-                        <h3>Create New API Key</h3>
-                        <label style="display:block; margin-bottom:6px; font-size:13px;">Key Name</label>
-                        <input type="text" id="newKeyName" placeholder="e.g. my-app-key" style="width:100%; padding:8px; margin-bottom:12px; box-sizing:border-box;">
-                        <label style="display:block; margin-bottom:6px; font-size:13px;">Role</label>
-                        <select id="newKeyRole" style="width:100%; padding:8px; margin-bottom:16px;">
-                            <option value="reader">Reader (query only)</option>
-                            <option value="uploader">Uploader (query + upload)</option>
-                            <option value="admin">Admin (full access)</option>
-                        </select>
-                        <div style="display:flex; justify-content:flex-end; gap:8px;">
-                            <button onclick="closeCreateKeyModal()" style="padding:8px 16px;">Cancel</button>
-                            <button onclick="submitCreateKey()" style="padding:8px 16px; background:#667eea; color:#fff; border:none; border-radius:4px;">Create</button>
-                        </div>
-                    </div>
-                </div>
-                <div id="keysResponse" class="response" style="display:none;">
-                    <pre id="keysResponseText"></pre>
                 </div>
             </div>
         </div>
@@ -607,18 +579,11 @@
         let currentUser = null;
 
         function getApiUrl() { return document.getElementById('apiUrl').value; }
-        function getApiKey() { return document.getElementById('apiKey').value; }
 
-        // Build Authorization header: prefer JWT bearer, fall back to X-API-Key
+        // Build Authorization header with JWT Bearer token
         function authHeaders(extra = {}) {
-            if (accessToken) {
-                return { ...extra, 'Authorization': 'Bearer ' + accessToken };
-            }
-            const key = getApiKey();
-            if (key) {
-                return { ...extra, 'X-API-Key': key };
-            }
-            return extra;
+            if (!accessToken) return extra;
+            return { ...extra, 'Authorization': 'Bearer ' + accessToken };
         }
 
         // Refresh the access token using the httpOnly refresh cookie
@@ -1039,101 +1004,13 @@
             return queryDocuments();
         }
 
-        async function listKeys() {
-            const url = getApiUrl();
-            const key = getApiKey();
-
-            console.log('ListKeys - URL:', url, 'Key:', key ? key.substring(0, 10) + '...' : 'EMPTY');
-
-            if (!key) {
-                alert('❌ Error: API Key is empty! Please fill it in the Configuration section.');
-                return;
-            }
-
-            try {
-                const response = await fetch(`${url}/admin/keys`, {
-                    method: 'GET',
-                    headers: {
-                        'X-API-Key': key
-                    }
-                });
-                const data = await response.json();
-                showResponse('keysResponse', data, response.status >= 400);
-            } catch (error) {
-                showResponse('keysResponse', { error: error.message }, true);
-            }
-        }
-
-        function openCreateKeyModal() {
-            const url = getApiUrl();
-            const key = getApiKey();
-            if (!key) {
-                alert('❌ Error: API Key is empty! Please fill it in the Configuration section.');
-                return;
-            }
-            document.getElementById('newKeyName').value = 'test-reader-key';
-            const modal = document.getElementById('createKeyModal');
-            modal.style.display = 'flex';
-            document.getElementById('newKeyName').focus();
-            document.getElementById('newKeyName').select();
-        }
-
-        function closeCreateKeyModal() {
-            document.getElementById('createKeyModal').style.display = 'none';
-        }
-
-        document.addEventListener('keydown', function(event) {
-            if (event.key === 'Escape' && document.getElementById('createKeyModal').style.display === 'flex') {
-                closeCreateKeyModal();
-            }
-        });
-
-        document.getElementById('createKeyModal').addEventListener('click', function(event) {
-            if (event.target === this) closeCreateKeyModal();
-        });
-
-        async function submitCreateKey() {
-            const keyName = document.getElementById('newKeyName').value.trim();
-            const role = document.getElementById('newKeyRole').value;
-            if (!keyName) {
-                alert('Key name is required.');
-                return;
-            }
-
-            const url = getApiUrl();
-            const key = getApiKey();
-            const payload = { name: keyName, role: role };
-
-            try {
-                const response = await fetch(`${url}/admin/keys`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-API-Key': key
-                    },
-                    body: JSON.stringify(payload)
-                });
-                const data = await response.json();
-                showResponse('keysResponse', data, response.status >= 400);
-                if (response.status < 400) {
-                    closeCreateKeyModal();
-                }
-            } catch (error) {
-                showResponse('keysResponse', { error: error.message }, true);
-            }
-        }
-
         function debugCheck() {
             const url = getApiUrl();
-            const key = getApiKey();
-
             document.getElementById('debugUrl').textContent = url || '❌ EMPTY';
-            document.getElementById('debugKey').textContent = key ? '✅ ' + key.substring(0, 20) + '...' : '❌ EMPTY';
-
-            if (!url || !key) {
-                alert('❌ Configuration incomplete!\n\nFill in both fields:\n1. API URL\n2. API Key');
+            if (!url) {
+                alert('❌ Configuration incomplete! Set API URL.');
             } else {
-                alert('✅ Configuration looks good!\n\nURL: ' + url + '\nKey: ' + key.substring(0, 20) + '...');
+                alert('✅ Config OK\nURL: ' + url);
             }
         }
     </script>

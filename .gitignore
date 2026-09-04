@@ -149,8 +149,7 @@ qdrant_storage/
 .cache/
 
 # Hugging Face cache
-.cache/huggingface/data/api_keys.json
-data/evaluation.json
-data/api_keys.json
+.cache/huggingface/data/evaluation.json
 data/evaluation.json
 data/auth_users.db
+data/auth_users.db-journal
