@@ -15,7 +15,6 @@ RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/wh
     && pip install --no-cache-dir -r requirements.txt
 
 COPY src ./src
-COPY data ./data
 
 EXPOSE 8000
 
