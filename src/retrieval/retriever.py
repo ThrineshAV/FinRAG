@@ -90,7 +90,7 @@ def retrieve_documents(
 
     if candidate_count is None:
         candidate_count = top_k * 4
-    candidate_count = min(max(candidate_count, top_k), index.ntotal)
+    candidate_count = min(max(candidate_count, top_k), max(index.ntotal, 1))
 
     # Ensure query_vector is the right shape for FAISS
     vector_search = query_vector.reshape(1, -1)
@@ -125,9 +125,7 @@ def retrieve_documents(
             top_k=top_k,
             metric=parsed_query.get("metric"),
         )
-    else:
-        results = results[:top_k]
-
+    results = results[:top_k]
     return results, parsed_query
 
 

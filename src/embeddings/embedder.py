@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -64,7 +65,6 @@ def store_embeddings(chunks: list[dict[str, Any]], embeddings: np.ndarray) -> No
         raise ValueError("Embeddings must be a non-empty matrix")
 
     # Compute SHA256 hashes for deduplication
-    import hashlib
     chunk_hashes = [hashlib.sha256(chunk["text"].encode()).hexdigest() for chunk in chunks]
 
     # Load existing hashes if metadata exists

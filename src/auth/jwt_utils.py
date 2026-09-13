@@ -4,7 +4,9 @@ import os
 import time
 from jose import jwt, JWTError
 
-JWT_SECRET = os.getenv("JWT_SECRET", "dev-secret-change-me")
+JWT_SECRET = os.getenv("JWT_SECRET")
+if not JWT_SECRET or len(JWT_SECRET) < 32:
+    raise ValueError("JWT_SECRET must be set to a secret of at least 32 chars via env")
 JWT_ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 15
 
@@ -26,5 +28,5 @@ def verify_access_token(token: str) -> dict | None:
     try:
         claims = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
         return claims
-    except (JWTError, Exception):
+    except JWTError:
         return None

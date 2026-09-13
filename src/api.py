@@ -56,10 +56,10 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # ✅ ADD CORS MIDDLEWARE - ALLOWS FRONTEND TO COMMUNICATE WITH BACKEND
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins (for development/testing)
-    allow_credentials=True,
-    allow_methods=["*"],  # Allow all HTTP methods (GET, POST, DELETE, etc.)
-    allow_headers=["*"],  # Allow all headers (including Authorization)
+    allow_origins=os.getenv("CORS_ORIGINS", "").split(",") or ["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
 )
 
 # Seed admin from env on startup
@@ -454,6 +454,7 @@ async def _process_single_file(file: UploadFile, metadata: dict[str, Any]) -> No
             chunks = create_page_chunks(pages, {**metadata, "document_id": Path(file.filename).stem})
             embeddings = generate_embeddings(chunks)
             store_embeddings(chunks, embeddings)
+            reload_vector_store()
             cache = get_cache_manager()
             cache.clear("finsight:query:")
             cache.clear("finsight:query_stream:")
@@ -461,6 +462,7 @@ async def _process_single_file(file: UploadFile, metadata: dict[str, Any]) -> No
             temporary_path.unlink(missing_ok=True)
     except Exception as exc:
         logger.error("Background ingestion failed for file %s: %s", file.filename, exc)
+        raise
 
 
 @app.post("/query")

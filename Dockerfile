@@ -8,6 +8,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     RATE_LIMIT_UPLOAD=5/minute \
     MAX_UPLOAD_SIZE_MB=25
 
+RUN groupadd -r appgroup && useradd -r -g appgroup appuser
+
 WORKDIR /app
 
 COPY requirements.txt .
@@ -20,5 +22,6 @@ COPY src ./src
 RUN mkdir -p /app/vector_db /app/data
 
 EXPOSE 8000
+USER appuser
 
 CMD ["uvicorn", "src.api:app", "--host", "0.0.0.0", "--port", "8000"]

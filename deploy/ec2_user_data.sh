@@ -72,7 +72,7 @@ User=ec2-user
 WorkingDirectory=/app/financial-rag
 Environment="PYTHONPATH=/app/financial-rag"
 EnvironmentFile=/app/financial-rag/.env
-ExecStart=/usr/bin/docker run --name finsight-rag --restart unless-stopped -p 8000:8000 -v /app/financial-rag/vector_db:/app/vector_db -v /app/financial-rag/data:/app/data -d finsight-rag
+ExecStart=/usr/bin/docker run --name finsight-rag --restart unless-stopped -p 8000:8000 --user $(id -u ec2-user):$(id -g ec2-user) -v /app/financial-rag/vector_db:/app/vector_db -v /app/financial-rag/data:/app/data -d finsight-rag
 ExecStop=/usr/bin/docker stop finsight-rag
 ExecStartPost=/usr/bin/docker cp finsight-rag:/app/financial-rag/vector_db /app/financial-rag/vector_db 2>/dev/null || true
 
