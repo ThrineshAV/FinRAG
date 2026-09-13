@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from typing import Any
 
 import numpy as np
@@ -16,6 +17,27 @@ from src.retrieval.reranker import rerank_documents
 TOP_K = 5
 
 EMBEDDING_CACHE_TTL = int(os.getenv("EMBEDDING_CACHE_TTL", "3600"))
+
+# Module-level cache for FAISS index and metadata
+_vector_store_lock = threading.Lock()
+_cached_index = None
+_cached_metadata = None
+
+
+def get_vector_store():
+    """Return cached FAISS index and metadata, loading from disk if needed."""
+    global _cached_index, _cached_metadata
+    with _vector_store_lock:
+        if _cached_index is None:
+            _cached_index, _cached_metadata = load_vector_store()
+        return _cached_index, _cached_metadata
+
+
+def reload_vector_store():
+    """Reload FAISS index and metadata from disk. Call after successful ingestion."""
+    global _cached_index, _cached_metadata
+    with _vector_store_lock:
+        _cached_index, _cached_metadata = load_vector_store()
 
 
 def _matches_filter(record: dict[str, Any], key: str, value: Any) -> bool:
@@ -37,6 +59,7 @@ def _matches_filter(record: dict[str, Any], key: str, value: Any) -> bool:
         normalized_value = normalized_value.removesuffix(suffix).strip()
     return normalized_record == normalized_value
 
+
 def retrieve_documents(
     query: str,
     top_k: int = TOP_K,
@@ -50,7 +73,7 @@ def retrieve_documents(
         raise ValueError("top_k must be positive")
 
     parsed_query = parse_query(query)
-    index, metadata = load_vector_store()
+    index, metadata = get_vector_store()
 
     # Cache lookup for query embedding
     cache_manager = get_cache_manager()
@@ -70,9 +93,9 @@ def retrieve_documents(
     candidate_count = min(max(candidate_count, top_k), index.ntotal)
 
     # Ensure query_vector is the right shape for FAISS
-    query_vector_search = query_vector.reshape(1, -1)
+    vector_search = query_vector.reshape(1, -1)
 
-    scores, indices = index.search(np.asarray(query_vector_search, dtype="float32"), candidate_count)
+    scores, indices = index.search(np.asarray(vector_search, dtype="float32"), candidate_count)
 
     explicit = filters or {}
     filters = {

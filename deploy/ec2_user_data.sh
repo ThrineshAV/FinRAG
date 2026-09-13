@@ -14,14 +14,12 @@ curl -fsSL https://get.docker.com -o get-docker.sh
 sh get-docker.sh
 echo "Docker installed"
 
-# Create app directory
+# Create app directory and clone repository
 mkdir -p /app/financial-rag
 cd /app/financial-rag
-
-# Clone FinSight-RAG repository (replace with your actual repo)
-# For demo, we'll assume the repo is already cloned locally
-# Copy from /workspace/financial-rag (since we're in the same container)
-cp -r /workspace/financial-rag/. .
+git clone https://github.com/ThrineshAV/financial-rag.git .
+git checkout main
+git pull origin main
 
 # Install Python dependencies
 python3 -m venv venv
@@ -63,11 +61,10 @@ sed -i "s|<RDS_ENDPOINT>|$DB_ENDPOINT|g" .env
 docker build -t finsight-rag .
 
 # Create systemd service for Docker container
-sudo bash -c "cat > /etc/systemd/system/finsight-rag.service <<EOF
-systemd
-Unit: finsight-rag.service
-Description: FinSight-RAG API Service
-After: network.target
+sudo bash -c 'cat > /etc/systemd/system/finsight-rag.service <<EOF
+[Unit]
+Description=FinSight-RAG API Service
+After=network.target
 
 [Service]
 Type=simple
@@ -75,18 +72,54 @@ User=ec2-user
 WorkingDirectory=/app/financial-rag
 Environment="PYTHONPATH=/app/financial-rag"
 EnvironmentFile=/app/financial-rag/.env
-ExecStart=/usr/bin/docker run --name finsight-rag --restart unless-stopped -p 8000:8000 -d finsight-rag
+ExecStart=/usr/bin/docker run --name finsight-rag --restart unless-stopped -p 8000:8000 -v /app/financial-rag/vector_db:/app/vector_db -v /app/financial-rag/data:/app/data -d finsight-rag
 ExecStop=/usr/bin/docker stop finsight-rag
-ExecStartPost=/usr/bin/docker cp finsight-rag:/app/financial-rag/vector_db /app/financial-rag/vector_db 2>/dev
+ExecStartPost=/usr/bin/docker cp finsight-rag:/app/financial-rag/vector_db /app/financial-rag/vector_db 2>/dev/null || true
 
 [Install]
 WantedBy=multi-user.target
-EOF
-"
+EOF'
 
 # Enable and start the service
+sudo systemctl daemon-reload
 sudo systemctl enable finsight-rag
-sudo systemctl start finsight-rag
+sudo systemctl restart finsight-rag
+
+# Install CloudWatch Agent for production logging
+curl -sL https://s3.amazonaws.com/amazoncloudwatch-agent/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb -o /tmp/amazon-cloudwatch-agent.deb
+sudo dpkg -i /tmp/amazon-cloudwatch-agent.deb || sudo apt-get install -f -y
+
+# Configure CloudWatch Agent
+sudo mkdir -p /opt/aws/amazon-cloudwatch-agent/etc
+sudo bash -c 'cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<EOF
+{
+  "agent": {
+    "metrics_collection_interval": 60,
+    "run_as_user": "root"
+  },
+  "logs": {
+    "metrics_collected": {
+      "mem": {
+        "measurement": ["mem_used_percent"]
+      }
+    },
+    "logs_collected": {
+      "files": {
+        "collect_list": [
+          {
+            "file_path": "/var/log/finsight-rag/*.log",
+            "log_group_name": "/finsight/app",
+            "log_stream_name": "{instance_id}"
+          }
+        ]
+      }
+    }
+  }
+}
+EOF'
+
+# Start CloudWatch Agent
+sudo systemctl start amazon-cloudwatch-agent || sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json -s
 
 # Install curl for health checks
 cat > /usr/local/bin/healthcheck.sh <<'EOS'

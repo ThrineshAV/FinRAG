@@ -37,7 +37,7 @@ from src.generation.llm import (
     generate_answer_grounded_stream,
     is_grounded_generation_available,
 )
-from src.retrieval.retriever import retrieve_documents
+from src.retrieval.retriever import reload_vector_store, retrieve_documents
 
 logger = logging.getLogger(__name__)
 
@@ -404,31 +404,34 @@ async def upload_pdf(
     results: list[UploadResponse] = []
 
     for upload, content in file_contents:
-        temporary_path: Path | None = None
-        try:
-            with NamedTemporaryFile(delete=False, suffix=".pdf") as temporary_file:
-                temporary_file.write(content)
-                temporary_path = Path(temporary_file.name)
+        async with ingestion_lock:
+            temporary_path: Path | None = None
+            try:
+                with NamedTemporaryFile(delete=False, suffix=".pdf") as temporary_file:
+                    temporary_file.write(content)
+                    temporary_path = Path(temporary_file.name)
 
-            pages = extract_pdf_pages(temporary_path)
-            chunks = create_page_chunks(pages, {**metadata, "document_id": Path(upload.filename).stem})
-            embeddings = generate_embeddings(chunks)
-            store_embeddings(chunks, embeddings)
+                pages = extract_pdf_pages(temporary_path)
+                chunks = create_page_chunks(pages, {**metadata, "document_id": Path(upload.filename).stem})
+                embeddings = generate_embeddings(chunks)
+                store_embeddings(chunks, embeddings)
 
-            results.append(UploadResponse(
-                filename=upload.filename,
-                chunks_indexed=len(chunks),
-                metadata=metadata.copy(),
-            ))
-        except (FileNotFoundError, ValueError) as exc:
-            logger.warning("PDF indexing failed for %s: %s", upload.filename, exc)
-            raise HTTPException(
-                status_code=422,
-                detail=f"Failed to index '{upload.filename}': {str(exc)}",
-            ) from exc
-        finally:
-            if temporary_path and temporary_path.exists():
-                temporary_path.unlink(missing_ok=True)
+                reload_vector_store()
+
+                results.append(UploadResponse(
+                    filename=upload.filename,
+                    chunks_indexed=len(chunks),
+                    metadata=metadata.copy(),
+                ))
+            except (FileNotFoundError, ValueError) as exc:
+                logger.warning("PDF indexing failed for %s: %s", upload.filename, exc)
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Failed to index '{upload.filename}': {str(exc)}",
+                ) from exc
+            finally:
+                if temporary_path and temporary_path.exists():
+                    temporary_path.unlink(missing_ok=True)
 
     cache = get_cache_manager()
     cache.clear("finsight:query:")

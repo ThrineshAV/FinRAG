@@ -16,6 +16,9 @@ RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/wh
 
 COPY src ./src
 
+# Create directories for persistent data
+RUN mkdir -p /app/vector_db /app/data
+
 EXPOSE 8000
 
 CMD ["uvicorn", "src.api:app", "--host", "0.0.0.0", "--port", "8000"]
