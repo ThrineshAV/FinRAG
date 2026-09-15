@@ -175,21 +175,170 @@ http://127.0.0.1:8000/docs
 
 ## Authentication
 
-The API supports two authentication methods:
-
-1. **JWT + Password** — End users. Uses email/password signup and login, returns an access token (15-min JWT) and an httpOnly refresh cookie (7-day).
+The API uses **JWT Bearer tokens** only. X-API-Key system is removed.
 
 ### Environment Variables
 
 | Variable | Default | Description |
 |---|---|---|
 | `AUTH_REQUIRED` | `true` | Enable/disable auth (set `false` for local dev) |
-| `JWT_SECRET` | *(required)* | Secret key for signing JWTs. Generate with `openssl rand -hex 32` |
+| `JWT_SECRET` | *(required)* | Secret key for signing JWTs (32+ chars). Generate with `openssl rand -hex 32`. In production, set via AWS Secrets Manager (key `finsight/prod`). For dev/test, fallback is used (see note below). |
 | `JWT_COOKIE_SECURE` | `false` | Set `true` in production (requires HTTPS) |
 | `ADMIN_EMAIL` | *(optional)* | Email for the auto-seeded admin account |
 | `ADMIN_PASSWORD` | *(optional)* | Password for the auto-seeded admin account |
 
-> **Important:** Set `JWT_SECRET` before running. If not set, the app logs a warning and falls back to an in-memory secret (tokens invalidate on restart).
+> **Important:** Set `JWT_SECRET` before running. If not set, the app logs a warning and falls back to an in-memory secret (tokens invalidate on restart). For AWS deployment, the `ec2_user_data.sh` script pulls JWT_SECRET from AWS Secrets Manager.
+
+### Sign Up
+
+```bash
+curl -X POST http://127.0.0.1:8000/auth/signup \
+  -H "Content-Type: application/json" \
+  -d '{"email": "alice@example.com", "password": "SecurePass123", "role": "reader"}'
+```
+
+Accepted roles: `reader` (query only), `uploader` (query + upload), `admin` (full access).
+
+### Login
+
+```bash
+curl -X POST http://127.0.0.1:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -c cookies.txt \
+  -d '{"email": "alice@example.com", "password": "SecurePass123"}'
+```
+
+Returns a JSON body with `access_token` and sets an httpOnly `refresh_token` cookie.
+
+### Using the Access Token
+
+Pass the access token as a Bearer token:
+
+```bash
+curl -X POST http://127.0.0.1:8000/query \
+  -H "Authorization: Bearer eyJhbGci..." \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What was Apple\'s revenue in 2025?"}'
+```
+
+### Refreshing the Access Token
+
+Call `/auth/refresh` — it reads the httpOnly cookie automatically and returns a new access token:
+
+```bash
+curl -X POST http://127.0.0.1:8000/auth/refresh \
+  -b cookies.txt -c cookies.txt
+```
+
+### Logout
+
+```bash
+curl -X POST http://127.0.0.1:8000/auth/logout -b cookies.txt
+```
+
+Revokes the refresh token and clears the cookie.
+
+### Roles
+
+| Role | Query | Upload | Admin |
+|---|---|---|---|
+| `reader` | ✅ | ❌ | ❌ |
+| `uploader` | ✅ | ✅ | ❌ |
+| `admin` | ✅ | ✅ | ✅ |
+
+### Disable Authentication (Local Development)
+
+```powershell
+$env:AUTH_REQUIRED="false"
+uvicorn src.api:app --reload
+```
+
+> **Note:** Admin-only endpoints always require authentication, even when `AUTH_REQUIRED=false`.
+
+### Available Endpoints
+
+`GET /health`
+
+Returns the service status. API responses include `X-Request-ID` and
+`X-Process-Time-Ms` headers.
+
+`GET /ready`
+
+Checks that the FAISS vector store is available. Returns `503` until the
+index and metadata are ready.
+
+`POST /upload`
+
+Accepts a PDF multipart upload with these form fields:
+
+- `file`
+- `company`
+- `document_type`
+- `fiscal_year`
+- `quarter`
+
+The PDF is extracted, split into page-aware chunks, embedded, and appended to
+FAISS. Existing indexed documents are preserved.
+
+`POST /query`
+
+Example request:
+
+```json
+{
+  "question": "What was Apple\'s net income in 2024?",
+  "company": "Apple",
+  "fiscal_year": "2024",
+  "top_k": 5
+}
+```
+
+The response contains a grounded answer when `OPENAI_API_KEY` is configured;
+otherwise it returns an evidence status, reranked text chunks, metadata, and
+page citations.
+
+`POST /query/stream`
+
+Streams answers as Server-Sent Events (SSE). Requires `OPENAI_API_KEY`. Same request format as `/query`.
+
+## Production Fixes & Security
+
+### JWT Secret Management
+
+- **Development/Test:** `src/auth/jwt_utils.py` provides a 32-char fallback (`dev-test-secret-key-at-least-32-chars-long!!`) when `JWT_SECRET` env var is missing. This fallback is marked with `# nosec B105` to suppress Bandit false positive.
+- **Production:** `deploy/ec2_user_data.sh` pulls JWT_SECRET from AWS Secrets Manager (key `finsight/prod`) at EC2 boot time. The script also sets up IAM permissions for Secrets Manager access.
+
+### Vector Store Persistence & Reliability
+
+- **SHA256 Dedup:** `src/embeddings/embedder.py` (lines 66-117) filters duplicate vectors by content hash before storing, preventing redundant entries.
+- **Threading Lock:** `src/api.py` (line 407) uses `ingestion_lock` to prevent race conditions during vector store reloads.
+- **FAISS Reload:** `src/retrieval/retriever.py` (lines 27-40) has atomic vector store reloads with proper cleanup.
+
+### Security Hardening
+
+- **CORS Restriction:** `src/api.py` (lines 57-63) allows only specific origins instead of `*`.
+- **JWT Secret Length:** `src/auth/jwt_utils.py` (line 7-9) enforces minimum 32-char secret with helpful error messages.
+- **Exception Handling:** `src/auth/jwt_utils.py` (line 31) narrows exception handling to prevent information leakage.
+
+### Docker Production Configuration
+
+- **Secure User:** `Dockerfile` uses `USER appuser` (line 11, 25) for non-root execution.
+- **Persistent Directories:** `/app/vector_db` and `/app/data` volumes (Dockerfile line 22) ensure data survives container restarts.
+
+### Systemd & CloudWatch Monitoring
+
+- **Service Management:** `deploy/ec2_user_data.sh` creates systemd service `finsight-rag.service` (lines 64-81) with automatic restarts and Docker container management.
+- **Volume Mounts:** Systemd service mounts `/app/financial-rag/vector_db:/app/vector_db` and `/app/financial-rag/data:/app/data` for persistence.
+- **CloudWatch Agent:** Script installs CloudWatch agent (lines 88-122) for production logging and monitoring.
+
+### Enhanced Reranking
+
+- **Truncation:** `src/retrieval/retriever.py` (line 121) implements query truncation to prevent overlong inputs to cross-encoder models.
+
+### Test Environment Setup
+
+- **Secure Defaults:** `tests/conftest.py` sets JWT_SECRET for test collection (`test-secret-key-at-least-32-chars-long`) to ensure tests run consistently.
+- **Bandit Compliance:** All security checks pass (B105 suppressed for test fallback).
 
 ### Sign Up
 

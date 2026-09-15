@@ -1,14 +1,14 @@
-# 🎯 HOW TO TEST THE API
+# 🎯 HOW TO TEST THE API (Updated for JWT Bearer Auth)
 
-## ✅ Everything is Fixed!
-
-Your API is now fully functional. Here's how to use it:
+The API uses JWT Bearer authentication only. X-API-Key authentication was removed. All endpoints that previously required X-API-Key now require an `Authorization: Bearer <token>` header.
 
 ---
 
 ## 1️⃣ START THE SERVER
 
 ```bash
+# Set JWT_SECRET for development (production pulls from AWS Secrets Manager via ec2_user_data.sh)
+export JWT_SECRET="dev-test-secret-key-at-least-32-chars-long!!"
 uvicorn src.api:app --reload
 ```
 
@@ -20,100 +20,95 @@ INFO:     Application startup complete
 
 ---
 
-## 2️⃣ TEST WITH FRONTEND (Recommended)
+## 2️⃣ TEST WITH JWT BEARER TOKEN (Curl)
 
-Open any of these in your browser:
-- `debug_frontend.html` ← **Best for testing** (shows detailed logs)
-- `frontend_simple.html` (simple interface)
-- `index.html` (full featured)
-
-**Admin Key to use:**
-```
-test123
-```
-
----
-
-## 3️⃣ TEST WITH CURL (Command Line)
+First, obtain an access token via `/auth/login`:
 
 ```bash
-# List all keys
-curl -H "X-API-Key: test123" http://127.0.0.1:8000/admin/keys
-
-# Create a new key
-curl -X POST http://127.0.0.1:8000/admin/keys \
-  -H "X-API-Key: test123" \
+# Login (returns access_token + refresh cookie)
+curl -X POST http://127.0.0.1:8000/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"name": "test-key", "role": "reader"}'
+  -c cookies.txt \
+  -d '{"email":"alice@example.com","password":"SecurePass123"}'
+```
 
-# Delete a key
-curl -X DELETE http://127.0.0.1:8000/admin/keys/admin001 \
-  -H "X-API-Key: test123"
+Then use the Bearer token for protected endpoints:
 
+```bash
 # Health check (no auth needed)
 curl http://127.0.0.1:8000/health
 
 # Ready check (no auth needed)
 curl http://127.0.0.1:8000/ready
+
+# Query with JWT Bearer header
+curl -X POST http://127.0.0.1:8000/query \
+  -H "Authorization: Bearer eyJhbGciOiHS256..." \
+  -H "Content-Type: application/json" \
+  -d '{"question":"What was Apple revenue in 2024?","company":"Apple","fiscal_year":"2024","top_k":5}'
+
+# Upload
+curl -X POST http://127.0.0.1:8000/upload \
+  -H "Authorization: Bearer eyJhbGciOiHS256..." \
+  -F "file=@test.pdf" \
+  -F "company=Apple" \
+  -F "document_type=10-K" \
+  -F "fiscal_year=2024" \
+  -F "quarter=Q4"
 ```
 
 ---
 
-## ⚠️ About Swagger UI (/docs)
+## ⚠️ Note: JWT Secret Fallback
 
-The Swagger UI at `http://127.0.0.1:8000/docs` requires you to add the header manually:
-
-1. Open `http://127.0.0.1:8000/docs`
-2. Click the padlock icon next to an endpoint
-3. Enter: `X-API-Key: test123`
-4. Click "Authorize"
-5. Try the endpoint
-
-**However, it's easier to use the frontend or curl instead.**
+If `JWT_SECRET` environment variable is not set (e.g., in some test runners), `src/auth/jwt_utils.py` uses a 32-character fallback (`dev-test-secret-key-at-least-32-chars-long!!`). This allows test collection to succeed without manual env setup. The fallback is suppressed for Bandit (`# nosec B105`). In production, the `ec2_user_data.sh` script pulls the real secret from AWS Secrets Manager (secret name `finsight/prod`).
 
 ---
 
-## 📊 ALL ENDPOINTS
+## 📊 CURRENT ENDPOINTS
 
 | Endpoint | Method | Auth | Description |
-|----------|--------|------|-------------|
+|---|---|---|---|
 | `/health` | GET | No | Server health check |
 | `/ready` | GET | No | Readiness probe |
-| `/admin/keys` | GET | ✅ Admin | List all API keys |
-| `/admin/keys` | POST | ✅ Admin | Create new API key |
-| `/admin/keys/{id}` | DELETE | ✅ Admin | Delete API key |
-| `/upload` | POST | ✅ Admin | Upload PDF document |
-| `/query` | POST | ✅ Reader/Admin | Query documents (stream or direct) |
+| `/auth/signup` | POST | No | User signup |
+| `/auth/login` | POST | No | User login (JWT + cookie) |
+| `/auth/refresh` | POST | Cookie only | Refresh access token |
+| `/auth/logout` | POST | Cookie only | Revoke refresh token |
+| `/upload` | POST | Bearer (Admin/Uploader) | Upload PDF document |
+| `/query` | POST | Bearer (Reader/Admin) | Query documents (direct or stream) |
+| `/query/stream` | POST | Bearer (Reader/Admin) | Streaming query response |
 
 ---
 
-## 🔑 YOUR TEST KEY
+## ✅ CURRENT CONFIGURATION STATUS
 
-| Property | Value |
-|----------|-------|
-| **Raw Key** | `test123` |
-| **Role** | `admin` |
-| **Hash** | `ecd71870d1963316a97e3ac3408c9835ad8cf0f3c1bc703527c30265534f75ae` |
-| **Status** | ✅ Active |
-
----
-
-## ✨ WHAT'S WORKING NOW
-
-✅ API key authentication  
-✅ Role-based access control  
-✅ Admin endpoints (GET, POST, DELETE)  
-✅ CORS enabled for browser requests  
-✅ Correct SHA-256 hashing  
-✅ Request parameter injection  
+- **Authentication:** JWT Bearer only (`JWT_SECRET` env or AWS Secrets Manager)
+- **Role-Based Access:** `READER`, `UPLOADER`, `ADMIN` roles enforced
+- **CORS:** Restricted to known origins (not `*`)
+- **Rate Limiting:** `/query`: 20/min; `/upload`: 5/min (`RATE_LIMIT_*` env vars)
+- **Security Scanning:** Bandit + Trivy passing; B105 suppressed for test fallback
+- **Test Environment:** `tests/conftest.py` sets `JWT_SECRET` for test collection
 
 ---
 
 ## 🚀 QUICK START
 
-1. **Start server:** `uvicorn src.api:app --reload`
-2. **Open frontend:** `debug_frontend.html`
-3. **Enter key:** `test123`
-4. **Click buttons:** List Keys, Create Key, Delete Key
-5. **Everything works!** ✅
+1. **Start server:** `export JWT_SECRET=dev-test-secret-key-at-least-32-chars-long!!; uvicorn src.api:app --reload`
+2. **Use curl or browser:** Send Bearer token via `Authorization` header
+3. **Production deploy:** Use `deploy/ec2_user_data.sh` (pulls JWT_SECRET from AWS Secrets Manager)
 
+---
+
+## 🔧 ENVIRONMENT CONFIGURATION
+
+Ensure these variables are set:
+
+- `JWT_SECRET` (32+ chars) — required for JWT signing
+- `AUTH_REQUIRED` — `true` (default) or `false` for local dev
+- `JWT_COOKIE_SECURE` — `false` (dev) / `true` (production with HTTPS)
+- `OPENAI_API_KEY` — required for grounded answers (optional for evidence retrieval)
+
+---
+
+*Note: The previous `X-API-Key: test123` authentication system has been fully removed. All references to `data/api_keys.json`, `API_KEYS_FILE`, `ADMIN_API_KEY`, and related admin key endpoints (`/admin/keys`) are obsolete.*

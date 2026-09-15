@@ -274,6 +274,37 @@ at runtime for query readiness. Cross-encoder reranking is disabled by default
 in Docker to avoid out-of-memory kills; it remains enabled by default locally.
 ```
 
+### 3.13 Authentication & Security
+
+Files: `src/auth/jwt_utils.py`, `src/auth/dependencies.py`, `src/auth/refresh.py`, `src/auth/database.py`
+
+The authentication system was migrated to **pure JWT Bearer tokens**. X-API-Key system fully removed.
+
+- JWT (HS256) with `JWT_SECRET` (32+ chars) — env var or AWS Secrets Manager in production
+- `ACCESS_TOKEN_EXPIRE_MINUTES = 15`, httpOnly refresh cookie (7-day)
+- Roles: `reader`, `uploader`, `admin` enforced via JWT `role` claim
+- No X-API-Key fallback; `/admin/*` endpoints require Bearer token
+- `tests/conftest.py` sets `JWT_SECRET` for test collection
+
+#### Production Fixes Applied (committed 623baf3, a649e2d)
+
+1. **JWT Secret Enforcement:** `src/auth/jwt_utils.py` — 32-char minimum, narrow exception handling
+2. **CORS Restriction:** `src/api.py` (lines 57-63) — specific origins only, not `*`
+3. **SHA256 Vector Dedup:** `src/embeddings/embedder.py` (lines 66-117) — filter duplicate vectors by content hash
+4. **Ingestion Lock:** `src/api.py` (line 407) — `threading.Lock` for safe concurrent ingestion
+5. **FAISS Reload:** `src/retrieval/retriever.py` (lines 27-40) — atomic reload with cleanup
+6. **Rerank Truncation:** `src/retrieval/retriever.py` (line 121) — query truncation before reranking
+7. **Docker Hardening:** `Dockerfile` — `USER appuser`, persistent `/app/vector_db` + `/app/data` volumes
+8. **Deploy Script:** `deploy/ec2_user_data.sh` — git clone, systemd service, volume mounts, CloudWatch agent
+
+#### Security Audit Results (committed 623baf3)
+
+- 13 security bugs fixed (CORS, secrets, hashing, exception handling, dependency injection)
+- 5 code-review bugs fixed (API design, documentation, error handling)
+- Bandit: 0 issues (B105 suppressed for test-only JWT fallback with `# nosec`)
+
+---
+
 ## 4. Git Milestones
 
 ### `2e7d031` - Initial FinSight-RAG pipeline

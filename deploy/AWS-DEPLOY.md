@@ -59,6 +59,8 @@ Generate JWT_SECRET locally:
 openssl rand -hex 32
 ```
 
+> **Dev fallback:** If `JWT_SECRET` env is missing, `src/auth/jwt_utils.py` uses a 32-char fallback (`dev-test-secret-key-at-least-32-chars-long!!`) marked with `# nosec B105`. This is for development/test only; production pulls the real secret from AWS Secrets Manager (`finsight/prod`) via the EC2 IAM role (`finsight-ec2-role` with `SecretsManagerReadWrite`).
+
 ## 5. Create S3 Bucket (for backups)
 
 1. Console → **S3** → **Create bucket**

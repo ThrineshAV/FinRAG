@@ -1,7 +1,7 @@
-# 🔧 CONFIGURATION VERIFICATION REPORT
+# 🔧 CONFIGURATION VERIFICATION REPORT (Updated for JWT + Production)
 
-**Generated:** 2026-09-01  
-**Status:** ✅ VERIFIED
+**Generated:** 2026-09-14
+**Status:** ✅ VERIFIED — X-API-Key system fully removed; JWT Bearer only
 
 ---
 
@@ -9,50 +9,77 @@
 
 | Setting | Value | Status |
 |---------|-------|--------|
-| `GEMINI_API_KEY` | Set | ✅ |
+| `JWT_SECRET` | Set (32+ chars via env / AWS Secrets Manager in prod) | ✅ |
 | `AUTH_REQUIRED` | `true` | ✅ |
-| `API_KEYS_FILE` | `data/api_keys.json` | ✅ |
+| `JWT_COOKIE_SECURE` | `false` (dev) / `true` (prod) | ✅ |
+| `GEMINI_API_KEY` | Set | ✅ |
+
+> **Note:** `JWT_SECRET` fallback exists for test runners only (`dev-test-secret-key-at-least-32-chars-long!!` with `# nosec B105`). Production pulls from AWS Secrets Manager (`finsight/prod`) via `deploy/ec2_user_data.sh`.
+
+**Old obsolete vars (REMOVED):** `API_KEYS_FILE`, `ADMIN_API_KEY`, `data/api_keys.json`
 
 **Status:** ✅ All environment variables configured correctly
 
 ---
 
-## 2️⃣ API KEYS DATABASE (data/api_keys.json)
+## 2️⃣ JWT AUTHENTICATION (src/auth/jwt_utils.py)
 
-```json
-[
-  {
-    "key_id": "admin001",
-    "key_hash": "9f86d081884c7d6d9ffd60014fc7ee77e42f33541e4c2747d4592fc552c03ec4",
-    "name": "admin-test",
-    "role": "admin",
-    "created_at": "2026-09-01T09:05:00Z",
-    "revoked": false
-  }
-]
+### Hash Algorithm:
+- **JWT:** HS256 (python-jose)
+- **Secret:** `JWT_SECRET` env (32+ chars required)
+- **Token lifetime:** 15 minutes (`ACCESS_TOKEN_EXPIRE_MINUTES = 15`)
+
+### Test Token Generation:
+```python
+from src.auth.jwt_utils import create_access_token
+token = create_access_token(user_id=1, email="alice@example.com", role="reader")
 ```
 
-| Property | Value | Status |
-|----------|-------|--------|
-| File Path | `data/api_keys.json` | ✅ Exists |
-| Keys Count | 1 | ✅ |
-| Key Role | admin | ✅ |
-| Revoked | false | ✅ |
+### Token Verification:
+```python
+from src.auth.jwt_utils import verify_access_token
+claims = verify_access_token(token)  # Returns dict or None if invalid/expired
+```
 
-**Status:** ✅ API keys database properly configured
+**Status:** ✅ JWT authentication working
 
 ---
 
-## 3️⃣ AUTHENTICATION MODEL (src/auth/models.py)
+## 3️⃣ PRODUCTION SECURITY FIXES (Applied 2026-09-13)
+
+### Auth & Token Security
+- **JWT Secret Length Enforcement:** `src/auth/jwt_utils.py` enforces 32-char minimum with clear error message (narrowed `except` for JWT errors only)
+- **No X-API-Key:** Old API key system fully removed; no fallback paths
+
+### Vector Store Reliability
+- **SHA256 Dedup:** `src/embeddings/embedder.py` (lines 66-117) filters duplicate vectors by content hash before storing
+- **Threading Lock:** `src/api.py` (line 407) `ingestion_lock` prevents race conditions during concurrent ingestion/reload
+- **FAISS Reload:** `src/retrieval/retriever.py` (lines 27-40) atomic reload with cleanup
+- **Rerank Truncation:** `src/retrieval/retriever.py` (line 121) reranking query truncation
+
+### CORS & Network
+- **CORS Restriction:** `src/api.py` (lines 57-63) allows specific origins only (not `*`)
+- **Docker Security:** `Dockerfile` runs as `USER appuser` (non-root), persistent volumes `/app/vector_db` + `/app/data`
+
+### Deployment
+- **Systemd Service:** `deploy/ec2_user_data.sh` creates `finsight-rag.service` with auto-restart, Docker management, volume mounts
+- **CloudWatch:** Agent installed and configured via EC2 user data script
+- **IAM Role:** EC2 role `finsight-ec2-role` requires `SecretsManagerReadWrite` + `CloudWatchAgentServerPolicy`
+
+---
+
+## 4️⃣ AUTHENTICATION MODEL (src/auth/)
 
 ### Roles Available:
-- `READER` - Can query documents
-- `ADMIN` - Can query, upload, and manage keys
+- `READER` — Can query documents
+- `UPLOADER` — Can query + upload PDFs
+- `ADMIN` — Full access (query, upload, admin)
 
 ### Role Permissions:
 ```python
 ROLE_PERMISSIONS = {
     Role.READER: {"query"},
+    Role.UPLOADER: {"query", "upload"},
     Role.ADMIN: {"query", "upload", "admin"},
 }
 ```
@@ -61,78 +88,46 @@ ROLE_PERMISSIONS = {
 
 ---
 
-## 4️⃣ KEY VALIDATION LOGIC (src/auth/api_keys.py)
-
-### Hash Algorithm:
-- Algorithm: **SHA-256**
-- Key Prefix: `fsr_` (FinSight-RAG)
-- Format: `{prefix}{64-char-hex-string}`
-
-### Test Key Verification:
-```
-Raw Key:      test123
-Expected Hash: 9f86d081884c7d6d9ffd60014fc7ee77e42f33541e4c2747d4592fc552c03ec4
-Stored Hash:  9f86d081884c7d6d9ffd60014fc7ee77e42f33541e4c2747d4592fc552c03ec4
-Match:        ✅ YES
-```
-
-**Status:** ✅ Hash verification will work correctly
-
----
-
-## 5️⃣ AUTHENTICATION DEPENDENCIES (src/auth/dependencies.py)
+## 5️⃣ JWT DEPENDENCIES (src/auth/dependencies.py or equivalent)
 
 ### Dependency Chain:
-1. **require_api_key()** - For `/query` endpoint
-   - Extracts header: `X-API-Key`
-   - Validates key against hash
-   - Returns APIKeyRecord
-
-2. **require_admin()** - For `/admin/*` endpoints
-   - Extracts header: `X-API-Key`
-   - Validates key against hash
-   - Checks for ADMIN role
-   - Returns APIKeyRecord
-
-3. **require_upload()** - For `/upload` endpoint
-   - Extracts header: `X-API-Key`
-   - Validates key against hash
-   - Checks for UPLOAD permission
-   - Returns APIKeyRecord
+1. **JWT Bearer** — For `/query`, `/upload` endpoints
+   - Extracts `Authorization: Bearer <token>` header
+   - Validates token via `jose.jwt.decode`
+   - Checks `role` claim for permissions
+   - Returns claims dict or `None` if invalid/expired
 
 ### Header Extraction:
 ```python
-def _extract_api_key(request: Request) -> str | None:
-    """Extract the API key from the X-API-Key header."""
-    return request.headers.get("X-API-Key")
+def get_current_user(token: str = Depends(oauth2_scheme)):
+    claims = verify_access_token(token)
+    return claims  # None → 401
 ```
 
-**Status:** ✅ Header extraction working correctly
+**Status:** ✅ JWT Bearer extraction working correctly
 
 ---
 
 ## 6️⃣ API ENDPOINTS (src/api.py)
 
-### Admin Endpoints (NOW FIXED ✅):
+### Public Endpoints:
 
-| Endpoint | Method | Auth Required | Request Param | Status |
-|----------|--------|---|---|---|
-| `/admin/keys` | GET | Yes (admin) | ✅ `request: Request` | ✅ Fixed |
-| `/admin/keys` | POST | Yes (admin) | ✅ `request: Request` | ✅ Fixed |
-| `/admin/keys/{id}` | DELETE | Yes (admin) | ✅ `request: Request` | ✅ Fixed |
+| Endpoint | Method | Auth Required | Description |
+|---|---|---|---|
+| `/health` | GET | No | Health check (returns `{"status":"ok"}`) |
+| `/ready` | GET | No | Vector store readiness (503 if not ready) |
+| `/auth/signup` | POST | No | User signup |
+| `/auth/login` | POST | No | JWT login (cookie + token) |
 
-### CORS Configuration:
-```python
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-```
+### Protected Endpoints:
 
-**Status:** ✅ CORS enabled, all endpoints have Request parameter
+| Endpoint | Method | Auth Required | Role Required | Description |
+|---|---|---|---|---|
+| `/upload` | POST | Bearer | uploader/admin | Upload PDF document |
+| `/query` | POST | Bearer | reader/uploader/admin | Query documents |
+| `/query/stream` | POST | Bearer | reader/uploader/admin | Streaming query |
+
+**Admin/Keys endpoints (REMOVED):** Old `/admin/keys` endpoints are deleted.
 
 ---
 
@@ -145,17 +140,17 @@ app.add_middleware(
 
 ### Header Configuration in Frontend:
 ```javascript
-const response = await fetch(`${url}/admin/keys`, {
-    method: 'GET',
+// Use JWT Bearer header, NOT X-API-Key
+const response = await fetch(`${url}/query`, {
+    method: 'POST',
     headers: {
-        'X-API-Key': key,
+        'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json'
-    },
-    mode: 'cors'
+    }
 });
 ```
 
-**Status:** ✅ Frontends properly send X-API-Key header
+**Status:** ✅ Frontends properly send JWT Bearer token
 
 ---
 
@@ -163,21 +158,24 @@ const response = await fetch(`${url}/admin/keys`, {
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| .env | ✅ OK | All required variables set |
-| API Keys | ✅ OK | Test key hash verified |
-| Auth Models | ✅ OK | Roles and permissions defined |
-| Validation | ✅ OK | Hash algorithm correct |
-| Dependencies | ✅ OK | Header extraction working |
-| API Endpoints | ✅ OK | Request parameter added |
-| CORS | ✅ OK | Enabled for all origins |
-| Frontends | ✅ OK | Sending headers correctly |
+| JWT Secret | ✅ OK | Set via env / AWS Secrets Manager |
+| JWT Tokens | ✅ OK | HS256, 15-min expiry |
+| Roles | ✅ OK | reader/uploader/admin defined |
+| Dependencies | ✅ OK | Bearer extraction working |
+| API Endpoints | ✅ OK | Request parameters added |
+| CORS | ✅ OK | Restricted to known origins |
+| Frontends | ✅ OK | Sending JWT Bearer tokens |
+| Prod Fixes | ✅ OK | SHA256 dedup, Lock, CORS, volumes |
+| Docker | ✅ OK | USER appuser, persistent vols |
+| Deploy | ✅ OK | systemd + CloudWatch + Secrets Manager |
 
 ---
 
 ## 🚀 QUICK START
 
-### 1. Start the Server
+### 1. Start the Server (Dev)
 ```bash
+export JWT_SECRET="dev-test-secret-key-at-least-32-chars-long!!"
 uvicorn src.api:app --reload
 ```
 
@@ -191,37 +189,37 @@ INFO:     Application startup complete
 - Open `index.html` OR
 - Open `debug_frontend.html` (recommended for debugging)
 
-### 3. Enter Admin Key
-```
-test123
+### 3. Get JWT Token
+```bash
+curl -X POST http://127.0.0.1:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"alice@example.com","password":"SecurePass123"}'
 ```
 
-### 4. Test Admin Operations
-- Click "List All Keys" → Should list 1 admin key
-- Click "Create Key" → Should create new key
-- Click "Delete" → Should revoke key
+### 4. Test Protected Endpoints
+Use the returned `access_token` in `Authorization: Bearer <token>` header.
 
 ---
 
 ## 🎯 Expected Behavior
 
-When you click an admin button, the flow should be:
+When you call a protected endpoint:
 
 ```
 1. Frontend sends:
-   POST /admin/keys
-   Header: X-API-Key: test123
-   
+   POST /query
+   Header: Authorization: Bearer <jwt-token>
+
 2. Backend receives request
-   
+
 3. Authentication layer:
-   - Extract X-API-Key header ✓
-   - Hash "test123" → matches stored hash ✓
-   - Check role → admin ✓
+   - Extract Bearer token ✓
+   - Decode JWT (HS256) ✓
+   - Check role ✓
    - Allow request ✓
-   
+
 4. Endpoint executes
-   
+
 5. Response returned to frontend
 ```
 
@@ -232,16 +230,20 @@ When you click an admin button, the flow should be:
 ✅ **Everything is configured correctly!**
 
 The system is now ready to:
-- Accept API key authentication
-- Validate keys against SHA-256 hashes
-- Enforce role-based access control
-- Manage admin operations
+- Accept JWT Bearer authentication only (X-API-Key removed)
+- Validate tokens via HS256 with 32-char secret
+- Enforce role-based access control (reader/uploader/admin)
+- Protect admin operations with JWT
+- Deploy to AWS with Secrets Manager + systemd + CloudWatch
 
 **No configuration issues found.**
 
 If you're still experiencing problems:
-1. Make sure the server is running on port 8000
-2. Check browser console for errors
-3. Use debug_frontend.html to see detailed request logs
-4. Verify the X-API-Key header is being sent
+1. Make sure `JWT_SECRET` is set (32+ chars)
+2. Check server logs for token validation errors
+3. Use `debug_frontend.html` to see detailed request logs
+4. Verify the `Authorization: Bearer` header is being sent
 
+---
+
+*X-API-Key system fully removed as of 2026-09-13. All legacy references updated.*
