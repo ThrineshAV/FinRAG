@@ -4,15 +4,15 @@ from unittest.mock import patch
 
 import fitz
 import numpy as np
-from fastapi.testclient import TestClient
+from fastapp.testclient import TestClient
 
-from src import api
-from src.embeddings import embedder
+from financial_rag.main import app
+from financial_rag.infrastructure.embeddings import embedder
 
 # Disable authentication for API integration tests
 os.environ["AUTH_REQUIRED"] = "false"
 
-client = TestClient(api.app)
+client = TestClient(app)
 
 
 def test_health_endpoint_returns_ok() -> None:
