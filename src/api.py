@@ -22,22 +22,22 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
-from src.auth import database as auth_db
-from src.auth import jwt_utils
-from src.auth import refresh as refresh_tokens
-from src.auth.dependencies import require_admin, require_auth, require_upload
+from financial_rag.infrastructure.auth import database as auth_db
+from financial_rag.infrastructure.auth import jwt_utils
+from financial_rag.infrastructure.auth import refresh as refresh_tokens
+from financial_rag.infrastructure.auth.dependencies import require_admin, require_auth, require_upload
 from passlib.hash import bcrypt
-from src.cache.manager import build_cache_key, get_cache_manager
-from src.embeddings.embedder import generate_embeddings, store_embeddings
-from src.embeddings.embedder import load_vector_store
-from src.ingestion.sec_ingestion import extract_pdf_pages
-from src.processing.chunker import create_page_chunks
-from src.generation.llm import (
+from financial_rag.infrastructure.cache.manager import build_cache_key, get_cache_manager
+from financial_rag.infrastructure.embeddings.embedder import generate_embeddings, store_embeddings
+from financial_rag.infrastructure.embeddings.embedder import load_vector_store
+from financial_rag.application.ingestion.sec_ingestion import extract_pdf_pages
+from financial_rag.application.processing.chunker import create_page_chunks
+from financial_rag.infrastructure.llm import (
     generate_answer_grounded,
     generate_answer_grounded_stream,
     is_grounded_generation_available,
 )
-from src.retrieval.retriever import reload_vector_store, retrieve_documents
+from financial_rag.infrastructure.vector_db.retriever import reload_vector_store, retrieve_documents
 
 logger = logging.getLogger(__name__)
 

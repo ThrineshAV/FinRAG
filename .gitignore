@@ -144,6 +144,19 @@ build/
 # Local Qdrant storage
 qdrant_storage/
 
+# New restructure artifacts (Sep 2026)
+scripts/*.pyc
+scripts/__pycache__/
+web/dist/
+web/*.log
+tests/unit/__pycache__/
+tests/e2e/__pycache__/
+tests/integration/__pycache__/
+pytest_out.txt
+CONFIGURATION_REPORT.md
+TESTING_GUIDE.md
+docker-compose.override.yml
+
 # Local cache
 .cache/
 .cache/

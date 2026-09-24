@@ -1,5 +1,5 @@
-from src.retrieval.retriever import retrieve_documents
-from src.generation.llm import generate_answer
+from financial_rag.infrastructure.vector_db.retriever import retrieve_documents
+from financial_rag.infrastructure.llm.llm import generate_answer
 
 
 # ============================================================
